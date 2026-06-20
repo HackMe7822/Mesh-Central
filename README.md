@@ -10,11 +10,10 @@ Publishes to **remote.creationsit.com** via a Cloudflare Tunnel (one tunnel, mul
 Run **as Administrator** in PowerShell on the target VM:
 
 ```powershell
-iwr "https://raw.githubusercontent.com/HackMe7822/Mesh-Central/main/install.ps1" -OutFile "C:\deploy.ps1"
-powershell -ExecutionPolicy Bypass -File "C:\deploy.ps1"
+$u=(iwr "https://api.github.com/repos/HackMe7822/Mesh-Central/contents/install.ps1" -UseBasicParsing|ConvertFrom-Json).download_url; iwr $u -OutFile "C:\deploy.ps1"; powershell -ExecutionPolicy Bypass -File "C:\deploy.ps1"
 ```
 
-> **Do NOT pipe through iex** - always download first, then run with -File.
+> Uses the GitHub API to get a commit-SHA URL — always pulls the latest version, never a cached copy.
 
 ---
 

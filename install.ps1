@@ -10,8 +10,7 @@
     Override with -Domain for any other subdomain on creationsit.com.
 
     Run as Administrator in PowerShell on the target VM:
-        iwr "https://raw.githubusercontent.com/HackMe7822/Mesh-Central/main/install.ps1" -OutFile "C:\deploy.ps1"
-        powershell -ExecutionPolicy Bypass -File "C:\deploy.ps1"
+        $u=(iwr "https://api.github.com/repos/HackMe7822/Mesh-Central/contents/install.ps1" -UseBasicParsing|ConvertFrom-Json).download_url; iwr $u -OutFile "C:\deploy.ps1"; powershell -ExecutionPolicy Bypass -File "C:\deploy.ps1"
 
     With a custom subdomain:
         powershell -ExecutionPolicy Bypass -File "C:\deploy.ps1" -Domain "crm.creationsit.com" -TunnelName "crm"
