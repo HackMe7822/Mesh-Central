@@ -82,20 +82,20 @@ if ($UpdateOnly) {
     $logoSrc = Join-Path $ScriptDir $LOGO_FILE
     if (Test-Path $logoSrc) {
         Copy-Item $logoSrc "$PUBLIC_DIR\$LOGO_FILE" -Force
-        Write-OK "Copied $LOGO_FILE from script directory"
+        Copy-Item $logoSrc "$DATA_DIR\$LOGO_FILE"   -Force
+        Write-OK "Copied $LOGO_FILE to public\ and data root"
     } else {
         Write-Info "Downloading $LOGO_FILE from GitHub..."
         Invoke-WebRequest -Uri $LOGO_RAW_URL -OutFile "$PUBLIC_DIR\$LOGO_FILE" -UseBasicParsing
+        Copy-Item "$PUBLIC_DIR\$LOGO_FILE" "$DATA_DIR\$LOGO_FILE" -Force
         Write-OK "Downloaded $LOGO_FILE"
     }
 
     Write-Step 2 "Refreshing config.json"
-    # (config written below - fall through to write block, then restart)
-    $iconFilePath = ($DATA_DIR + "\public\" + $LOGO_FILE) -replace '\\', '\\\\'
     $configJson = @"
 {
   "settings": {
-    "cert": "$DOMAIN",
+    "cert": "$Domain",
     "minify": true,
     "port": 443,
     "redirPort": 80,
@@ -104,14 +104,13 @@ if ($UpdateOnly) {
       "description": "$BRAND_NAME Remote Management Agent",
       "companyName": "$BRAND_NAME",
       "fileName": "CreationsIT-Agent",
-      "iconFile": "$iconFilePath"
+      "iconFile": "$LOGO_FILE"
     }
   },
   "domains": {
     "": {
       "title": "$BRAND_NAME",
       "title2": "$BRAND_TITLE2",
-      "titlePicture": "$LOGO_FILE",
       "footer": "$BRAND_NAME - Remote Support",
       "newAccounts": false
     }
@@ -130,7 +129,7 @@ if ($UpdateOnly) {
 
     Write-Host ""
     Write-Host "  Update complete. Hard-refresh the browser (Ctrl+Shift+R) to see changes." -ForegroundColor Green
-    Write-Host "  Agent branding applies to newly downloaded agents from https://$DOMAIN" -ForegroundColor Green
+    Write-Host "  Agent branding applies to newly downloaded agents from https://$Domain" -ForegroundColor Green
     Write-Host ""
     exit 0
 }
@@ -212,11 +211,13 @@ Write-Step 4 "Branding logo ($LOGO_FILE)"
 $logoSrc = Join-Path $ScriptDir $LOGO_FILE
 if (Test-Path $logoSrc) {
     Copy-Item $logoSrc "$PUBLIC_DIR\$LOGO_FILE" -Force
-    Write-OK "Copied $LOGO_FILE from script directory"
+    Copy-Item $logoSrc "$DATA_DIR\$LOGO_FILE"   -Force
+    Write-OK "Copied $LOGO_FILE to public\ and data root (agent patching)"
 } else {
     Write-Info "Downloading $LOGO_FILE from GitHub..."
     Invoke-WebRequest -Uri $LOGO_RAW_URL -OutFile "$PUBLIC_DIR\$LOGO_FILE" -UseBasicParsing
-    Write-OK "Downloaded $LOGO_FILE to $PUBLIC_DIR\"
+    Copy-Item "$PUBLIC_DIR\$LOGO_FILE" "$DATA_DIR\$LOGO_FILE" -Force
+    Write-OK "Downloaded $LOGO_FILE to public\ and data root (agent patching)"
 }
 
 # --------------------------------------------------------------
@@ -226,12 +227,11 @@ if (Test-Path $logoSrc) {
 #  for MeshCentral to patch the agent binary with the custom icon + title.
 # --------------------------------------------------------------
 Write-Step 5 "Writing config.json"
-$iconFilePath = ($DATA_DIR + "\public\" + $LOGO_FILE) -replace '\\', '\\\\'
 
 $configJson = @"
 {
   "settings": {
-    "cert": "$DOMAIN",
+    "cert": "$Domain",
     "minify": true,
     "port": 443,
     "redirPort": 80,
@@ -240,14 +240,13 @@ $configJson = @"
       "description": "$BRAND_NAME Remote Management Agent",
       "companyName": "$BRAND_NAME",
       "fileName": "CreationsIT-Agent",
-      "iconFile": "$iconFilePath"
+      "iconFile": "$LOGO_FILE"
     }
   },
   "domains": {
     "": {
       "title": "$BRAND_NAME",
       "title2": "$BRAND_TITLE2",
-      "titlePicture": "$LOGO_FILE",
       "footer": "$BRAND_NAME - Remote Support",
       "newAccounts": false
     }
