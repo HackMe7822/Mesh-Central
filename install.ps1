@@ -433,7 +433,7 @@ credentials-file: $credFile
 
 ingress:
   - hostname: $Domain
-    service: https://localhost:443
+    service: https://127.0.0.1:443
     originRequest:
       noTLSVerify: true
   # --- Add more apps below this line ---
