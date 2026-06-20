@@ -394,40 +394,54 @@ if (-not $SkipCloudflare) {
     Write-Step 10 "Cloudflare Tunnel ($TunnelName)"
     New-Item -ItemType Directory -Force -Path $CF_CONFIG_DIR | Out-Null
 
-    # Delete existing tunnel with same name if it exists (cleanup connections first)
-    cmd /c "cloudflared tunnel info $TunnelName >nul 2>&1"
-    if ($LASTEXITCODE -eq 0) {
-        Write-Info "Old tunnel found - cleaning up and deleting..."
-        cmd /c "cloudflared tunnel cleanup $TunnelName >nul 2>&1"
-        Start-Sleep 2
-        cmd /c "cloudflared tunnel delete $TunnelName >nul 2>&1"
-        Start-Sleep 2
-    }
-
-    $createOut = (cmd /c "cloudflared tunnel create $TunnelName 2>&1")
-    $createOut = ($createOut -join " ")
-    if ($LASTEXITCODE -ne 0) { Write-Fail "tunnel create failed: $createOut" }
-
+    # Check if tunnel already exists - reuse it to preserve other apps on this tunnel
     $tunnelId = ""
-    if ($createOut -match "([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})") {
+    $tunnelExists = $false
+    $infoOut = (cmd /c "cloudflared tunnel info $TunnelName 2>&1") -join " "
+    if ($LASTEXITCODE -eq 0 -and $infoOut -match "([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})") {
         $tunnelId = $Matches[1]
+        $tunnelExists = $true
+        Write-OK "Existing tunnel found: $TunnelName ($tunnelId) - reusing, other apps unaffected"
+    } else {
+        Write-Info "No existing tunnel found - creating $TunnelName..."
+        $createOut = (cmd /c "cloudflared tunnel create $TunnelName 2>&1") -join " "
+        if ($LASTEXITCODE -ne 0) { Write-Fail "tunnel create failed: $createOut" }
+        if ($createOut -match "([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})") {
+            $tunnelId = $Matches[1]
+        }
+        if (-not $tunnelId) { Write-Fail "Could not extract Tunnel ID from: $createOut" }
+        Write-OK "Tunnel created: $TunnelName ($tunnelId)"
     }
-    if (-not $tunnelId) { Write-Fail "Could not extract Tunnel ID from: $createOut" }
-    Write-OK "Tunnel created: $TunnelName  ($tunnelId)"
 
-    Write-Step 11 "DNS record ($DOMAIN)"
-    $dnsOut = (cmd /c "cloudflared tunnel route dns --overwrite-dns $TunnelName $DOMAIN 2>&1") -join " "
+    Write-Step 11 "DNS record ($Domain)"
+    $dnsOut = (cmd /c "cloudflared tunnel route dns --overwrite-dns $TunnelName $Domain 2>&1") -join " "
     if ($LASTEXITCODE -ne 0) { Write-Fail "DNS record creation failed: $dnsOut" }
-    Write-OK "DNS: $DOMAIN -> $TunnelName"
+    Write-OK "DNS: $Domain -> $TunnelName"
 
     Write-Step 12 "Cloudflare tunnel config + service"
     $credFile = "C:\Users\Administrator\.cloudflared\$tunnelId.json"
-    # One tunnel handles ALL subdomains on this VM.
-    # To add a new app later:
-    #   1. Add an ingress rule below  (hostname + service)
-    #   2. Run: cloudflared tunnel route dns $TunnelName newapp.creationsit.com
-    #   3. Restart-Service cloudflared
-    $cfYml = @"
+
+    if ($tunnelExists -and (Test-Path "$CF_CONFIG_DIR\config.yml")) {
+        # Tunnel already exists - only add our hostname if it is not already in the config
+        $existingYml = Get-Content "$CF_CONFIG_DIR\config.yml" -Raw
+        if ($existingYml -match "hostname:\s*$([regex]::Escape($Domain))") {
+            Write-OK "$Domain already present in config.yml - no change needed"
+        } else {
+            Write-Info "Adding $Domain to existing config.yml..."
+            $newRule = "  - hostname: $Domain`n    service: http://127.0.0.1:443"
+            $existingYml = $existingYml -replace "(\r?\n[ \t]*- service: http_status:404)", "`n$newRule`n`$1"
+            [System.IO.File]::WriteAllText("$CF_CONFIG_DIR\config.yml", $existingYml, [System.Text.UTF8Encoding]::new($false))
+            Write-OK "Added $Domain to config.yml (all other rules untouched)"
+        }
+        # Restart service to pick up any config changes
+        Write-Info "Restarting cloudflared service..."
+        cmd /c "sc stop cloudflared >nul 2>&1"
+        Start-Sleep 5
+        cmd /c "sc start cloudflared >nul 2>&1"
+        Start-Sleep 8
+    } else {
+        # New tunnel - write a fresh config and (re)create the Windows service
+        $cfYml = @"
 tunnel: $tunnelId
 credentials-file: $credFile
 
@@ -435,47 +449,45 @@ ingress:
   - hostname: $Domain
     service: http://127.0.0.1:443
   # --- Add more apps below this line ---
-  # - hostname: crm.creationsit.com
+  # - hostname: trading.creationsit.com
   #   service: http://localhost:3000
   # - hostname: files.creationsit.com
   #   service: http://localhost:8080
   # -------------------------------------
   - service: http_status:404
 "@
-    [System.IO.File]::WriteAllText("$CF_CONFIG_DIR\config.yml", $cfYml, [System.Text.UTF8Encoding]::new($false))
-    Write-OK "Config: $CF_CONFIG_DIR\config.yml (add more apps here)"
+        [System.IO.File]::WriteAllText("$CF_CONFIG_DIR\config.yml", $cfYml, [System.Text.UTF8Encoding]::new($false))
+        Write-OK "Config written: $CF_CONFIG_DIR\config.yml"
 
-    # Remove any existing cloudflared service
-    $existingCf = Get-Service cloudflared -ErrorAction SilentlyContinue
-    if ($existingCf) {
-        Write-Info "Removing existing cloudflared service..."
-        cmd /c "sc stop cloudflared >nul 2>&1"
-        Start-Sleep 3
-        # Kill the process to release all handles so Windows can complete the delete
-        cmd /c "taskkill /f /im cloudflared.exe >nul 2>&1"
-        Start-Sleep 2
-        cmd /c "sc delete cloudflared >nul 2>&1"
-        Start-Sleep 5
-    }
-
-    # Find cloudflared.exe path
-    $cfExe = (Get-Command cloudflared -ErrorAction SilentlyContinue).Source
-    if (-not $cfExe) {
-        foreach ($d in @("C:\Program Files (x86)\cloudflare\cloudflared",
-                         "C:\Program Files\cloudflare\cloudflared")) {
-            if (Test-Path "$d\cloudflared.exe") { $cfExe = "$d\cloudflared.exe"; break }
+        # Remove any existing cloudflared service
+        $existingCf = Get-Service cloudflared -ErrorAction SilentlyContinue
+        if ($existingCf) {
+            Write-Info "Removing existing cloudflared service..."
+            cmd /c "sc stop cloudflared >nul 2>&1"
+            Start-Sleep 3
+            cmd /c "taskkill /f /im cloudflared.exe >nul 2>&1"
+            Start-Sleep 2
+            cmd /c "sc delete cloudflared >nul 2>&1"
+            Start-Sleep 5
         }
+
+        $cfExe = (Get-Command cloudflared -ErrorAction SilentlyContinue).Source
+        if (-not $cfExe) {
+            foreach ($d in @("C:\Program Files (x86)\cloudflare\cloudflared",
+                             "C:\Program Files\cloudflare\cloudflared")) {
+                if (Test-Path "$d\cloudflared.exe") { $cfExe = "$d\cloudflared.exe"; break }
+            }
+        }
+        if (-not $cfExe) { Write-Fail "cloudflared.exe not found - cannot create service." }
+
+        $binPath = "`"$cfExe`" --config `"$CF_CONFIG_DIR\config.yml`" tunnel run"
+        cmd /c "sc.exe create cloudflared binPath= `"$binPath`" start= auto obj= LocalSystem DisplayName= `"Cloudflare Tunnel`" >nul 2>&1"
+        cmd /c "sc.exe description cloudflared `"Cloudflare Tunnel - Creations IT`" >nul 2>&1"
+        if ($LASTEXITCODE -ne 0) { Write-Fail "cloudflared service creation failed." }
+
+        cmd /c "sc.exe start cloudflared >nul 2>&1"
+        Start-Sleep 8
     }
-    if (-not $cfExe) { Write-Fail "cloudflared.exe not found - cannot create service." }
-
-    # Create service directly with sc.exe using the exact command that works manually
-    $binPath = "`"$cfExe`" --config `"$CF_CONFIG_DIR\config.yml`" tunnel run"
-    cmd /c "sc.exe create cloudflared binPath= `"$binPath`" start= auto obj= LocalSystem DisplayName= `"Cloudflare Tunnel`" >nul 2>&1"
-    cmd /c "sc.exe description cloudflared `"Cloudflare Tunnel - Creations IT`" >nul 2>&1"
-    if ($LASTEXITCODE -ne 0) { Write-Fail "cloudflared service creation failed." }
-
-    cmd /c "sc.exe start cloudflared >nul 2>&1"
-    Start-Sleep 8
 
     $cfSvc = Get-Service cloudflared -ErrorAction SilentlyContinue
     if ($cfSvc -and $cfSvc.Status -eq "Running") {
