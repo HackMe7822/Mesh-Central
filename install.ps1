@@ -7,24 +7,27 @@
     Windows service, sets up Windows Firewall, and wires up a fresh Cloudflare Tunnel
     to mesh.creationsit.com.
 
-    Run as Administrator in PowerShell:
+    Run as Administrator in PowerShell on the target VM:
         iwr -useb https://raw.githubusercontent.com/HackMe7822/Mesh-Central/main/install.ps1 | iex
 
-    Or to skip Cloudflare setup (re-run after it is already configured):
-        .\install.ps1 -SkipCloudflare
+    Re-run flags:
+        -SkipCloudflare     Skip Cloudflare tunnel setup (already configured)
+        -SkipNodeInstall    Skip Node.js install (already installed)
+        -UpdateOnly         Only refresh config.json + branding, restart service — no reinstall
 #>
 
 param(
     [string]$AdminUser  = "",
     [string]$AdminEmail = "",
     [switch]$SkipCloudflare,
-    [switch]$SkipNodeInstall
+    [switch]$SkipNodeInstall,
+    [switch]$UpdateOnly
 )
 
 $ErrorActionPreference = "Stop"
 
 # ──────────────────────────────────────────────────────────────
-#  CONFIGURATION  (edit these if you fork for a different client)
+#  CONFIGURATION
 # ──────────────────────────────────────────────────────────────
 $INSTALL_DIR   = "C:\MeshCentral"
 $DATA_DIR      = "$INSTALL_DIR\meshcentral-data"
@@ -34,6 +37,8 @@ $TUNNEL_NAME   = "meshcentral"
 $DOMAIN        = "mesh.creationsit.com"
 $BRAND_NAME    = "Creations IT"
 $BRAND_TITLE2  = "Remote Support"
+$LOGO_FILE     = "CreationsIT.ico"
+$LOGO_RAW_URL  = "https://raw.githubusercontent.com/HackMe7822/Mesh-Central/main/CreationsIT.ico"
 # ──────────────────────────────────────────────────────────────
 
 function Write-Banner {
@@ -44,31 +49,83 @@ function Write-Banner {
     Write-Host "  ============================================" -ForegroundColor Blue
     Write-Host ""
 }
+function Write-Step([int]$n, [string]$text) { Write-Host "`n  [$n] $text" -ForegroundColor Cyan }
+function Write-OK([string]$t)   { Write-Host "      OK  $t" -ForegroundColor Green }
+function Write-Info([string]$t) { Write-Host "      --> $t" -ForegroundColor Yellow }
+function Write-Fail([string]$t) { Write-Host "      ERR $t" -ForegroundColor Red; exit 1 }
 
-function Write-Step([int]$n, [string]$text) {
-    Write-Host ""
-    Write-Host "  [$n] $text" -ForegroundColor Cyan
-}
-
-function Write-OK([string]$text)   { Write-Host "      OK  $text" -ForegroundColor Green }
-function Write-Info([string]$text) { Write-Host "      --> $text" -ForegroundColor Yellow }
-function Write-Fail([string]$text) { Write-Host "      ERR $text" -ForegroundColor Red; exit 1 }
-
-# ──────────────────────────────────────────────────────────────
-#  PRE-FLIGHT
-# ──────────────────────────────────────────────────────────────
 Write-Banner
 
 $isPrincipal = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $isPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Write-Fail "Must run as Administrator. Right-click PowerShell > Run as administrator."
+    Write-Fail "Must run as Administrator."
 }
 
-# Resolve script directory - works both when run from a file and when piped via iex
-if ($PSScriptRoot) {
-    $ScriptDir = $PSScriptRoot
-} else {
-    $ScriptDir = $PWD.Path
+# Resolve script directory (works both from file and from iex pipe)
+if ($PSScriptRoot) { $ScriptDir = $PSScriptRoot } else { $ScriptDir = $PWD.Path }
+
+# ──────────────────────────────────────────────────────────────
+#  -UpdateOnly : refresh config + branding only, then exit
+# ──────────────────────────────────────────────────────────────
+if ($UpdateOnly) {
+    Write-Host "  [UPDATE ONLY MODE]" -ForegroundColor Magenta
+
+    Write-Step 1 "Refreshing branding logo"
+    New-Item -ItemType Directory -Force -Path $PUBLIC_DIR | Out-Null
+    $logoSrc = Join-Path $ScriptDir $LOGO_FILE
+    if (Test-Path $logoSrc) {
+        Copy-Item $logoSrc "$PUBLIC_DIR\$LOGO_FILE" -Force
+        Write-OK "Copied $LOGO_FILE from script directory"
+    } else {
+        Write-Info "Downloading $LOGO_FILE from GitHub..."
+        Invoke-WebRequest -Uri $LOGO_RAW_URL -OutFile "$PUBLIC_DIR\$LOGO_FILE" -UseBasicParsing
+        Write-OK "Downloaded $LOGO_FILE"
+    }
+
+    Write-Step 2 "Refreshing config.json"
+    # (config written below — fall through to write block, then restart)
+    $iconFilePath = ($DATA_DIR + "\public\" + $LOGO_FILE) -replace '\\', '\\\\'
+    $configJson = @"
+{
+  "settings": {
+    "cert": "$DOMAIN",
+    "minify": true,
+    "port": 443,
+    "redirPort": 80,
+    "agentCustomization": {
+      "displayName": "$BRAND_NAME Remote Support",
+      "description": "$BRAND_NAME Remote Management Agent",
+      "companyName": "$BRAND_NAME",
+      "fileName": "CreationsIT-Agent",
+      "iconFile": "$iconFilePath"
+    }
+  },
+  "domains": {
+    "": {
+      "title": "$BRAND_NAME",
+      "title2": "$BRAND_TITLE2",
+      "titlePicture": "$LOGO_FILE",
+      "footer": "$BRAND_NAME - Remote Support",
+      "newAccounts": false
+    }
+  }
+}
+"@
+    $configJson | Out-File -FilePath "$DATA_DIR\config.json" -Encoding utf8
+    Write-OK "config.json updated"
+
+    Write-Step 3 "Restarting MeshCentral service"
+    Restart-Service MeshCentral -Force -ErrorAction SilentlyContinue
+    Start-Sleep 5
+    $s = Get-Service MeshCentral -ErrorAction SilentlyContinue
+    if ($s -and $s.Status -eq "Running") { Write-OK "MeshCentral restarted" }
+    else { Write-Info "Check: sc query MeshCentral" }
+
+    Write-Host ""
+    Write-Host "  Update complete. Hard-refresh the browser (Ctrl+Shift+R) to see changes." -ForegroundColor Green
+    Write-Host "  Agent branding applies to newly downloaded agents from https://$DOMAIN" -ForegroundColor Green
+    Write-Host ""
+    exit 0
 }
 
 # ──────────────────────────────────────────────────────────────
@@ -79,9 +136,7 @@ Write-Step 1 "Node.js LTS"
 $nodeOk = $false
 try {
     $nodeVer = (node --version 2>$null)
-    if ($nodeVer -match "^v(\d+)") {
-        if ([int]$Matches[1] -ge 18) { $nodeOk = $true }
-    }
+    if ($nodeVer -match "^v(\d+)") { if ([int]$Matches[1] -ge 18) { $nodeOk = $true } }
 } catch {}
 
 if ($nodeOk) {
@@ -91,19 +146,14 @@ if ($nodeOk) {
 } else {
     Write-Info "Installing Node.js LTS via winget..."
     winget install OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements --silent
-    if ($LASTEXITCODE -ne 0) { Write-Fail "winget Node.js install failed. Install manually from nodejs.org" }
-
-    # Refresh PATH for this session
-    $machinePath = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
-    $userPath    = [System.Environment]::GetEnvironmentVariable("Path", "User")
-    $env:Path    = "$machinePath;$userPath"
-
+    if ($LASTEXITCODE -ne 0) { Write-Fail "winget Node.js install failed." }
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
     $nodeVer = (node --version 2>$null)
     Write-OK "Node.js $nodeVer installed"
 }
 
 # ──────────────────────────────────────────────────────────────
-#  STEP 2 : Create directories
+#  STEP 2 : Directories
 # ──────────────────────────────────────────────────────────────
 Write-Step 2 "Creating directories"
 New-Item -ItemType Directory -Force -Path $INSTALL_DIR | Out-Null
@@ -114,81 +164,73 @@ Write-OK "Directories ready under $INSTALL_DIR"
 # ──────────────────────────────────────────────────────────────
 #  STEP 3 : Install MeshCentral
 # ──────────────────────────────────────────────────────────────
-Write-Step 3 "Installing MeshCentral (npm install meshcentral)"
+Write-Step 3 "Installing MeshCentral"
 Set-Location $INSTALL_DIR
-
 if (Test-Path "$INSTALL_DIR\node_modules\meshcentral") {
-    Write-OK "MeshCentral already installed, skipping npm install"
+    Write-OK "MeshCentral already installed"
 } else {
-    Write-Info "This takes 1-3 minutes..."
+    Write-Info "Running npm install meshcentral (1-3 min)..."
     npm install meshcentral
     if ($LASTEXITCODE -ne 0) { Write-Fail "npm install meshcentral failed." }
     Write-OK "MeshCentral installed"
 }
 
 # ──────────────────────────────────────────────────────────────
-#  STEP 4 : Write config.json (with Creations IT branding)
+#  STEP 4 : Branding logo
 # ──────────────────────────────────────────────────────────────
-Write-Step 4 "Writing MeshCentral config.json"
+Write-Step 4 "Branding logo ($LOGO_FILE)"
+$logoSrc = Join-Path $ScriptDir $LOGO_FILE
+if (Test-Path $logoSrc) {
+    Copy-Item $logoSrc "$PUBLIC_DIR\$LOGO_FILE" -Force
+    Write-OK "Copied $LOGO_FILE from script directory"
+} else {
+    Write-Info "Downloading $LOGO_FILE from GitHub..."
+    Invoke-WebRequest -Uri $LOGO_RAW_URL -OutFile "$PUBLIC_DIR\$LOGO_FILE" -UseBasicParsing
+    Write-OK "Downloaded $LOGO_FILE to $PUBLIC_DIR\"
+}
 
-# NOTE: agentCustomization changes the agent installer window title and icon.
-#       titlePicture references logo.png placed in meshcentral-data\public\
+# ──────────────────────────────────────────────────────────────
+#  STEP 5 : config.json
+#
+#  IMPORTANT: agentCustomization MUST live in "settings" (not "domains")
+#  for MeshCentral to patch the agent binary with the custom icon + title.
+# ──────────────────────────────────────────────────────────────
+Write-Step 5 "Writing config.json"
+$iconFilePath = ($DATA_DIR + "\public\" + $LOGO_FILE) -replace '\\', '\\\\'
+
 $configJson = @"
 {
   "settings": {
     "cert": "$DOMAIN",
     "minify": true,
     "port": 443,
-    "redirPort": 80
+    "redirPort": 80,
+    "agentCustomization": {
+      "displayName": "$BRAND_NAME Remote Support",
+      "description": "$BRAND_NAME Remote Management Agent",
+      "companyName": "$BRAND_NAME",
+      "fileName": "CreationsIT-Agent",
+      "iconFile": "$iconFilePath"
+    }
   },
   "domains": {
     "": {
       "title": "$BRAND_NAME",
       "title2": "$BRAND_TITLE2",
-      "titlePicture": "logo.png",
+      "titlePicture": "$LOGO_FILE",
       "footer": "$BRAND_NAME - Remote Support",
-      "newAccounts": false,
-      "agentCustomization": {
-        "displayName": "$BRAND_NAME Remote Support",
-        "description": "$BRAND_NAME Remote Management Agent",
-        "companyName": "$BRAND_NAME",
-        "iconFile": "logo.ico"
-      }
+      "newAccounts": false
     }
   }
 }
 "@
-
 $configJson | Out-File -FilePath "$DATA_DIR\config.json" -Encoding utf8
-Write-OK "Config written to $DATA_DIR\config.json"
+Write-OK "config.json written to $DATA_DIR\config.json"
 
 # ──────────────────────────────────────────────────────────────
-#  STEP 5 : Copy branding assets (logo.png / logo.ico)
+#  STEP 6 : Admin account
 # ──────────────────────────────────────────────────────────────
-Write-Step 5 "Branding assets"
-
-$logoCopied = $false
-foreach ($ext in @("png", "ico")) {
-    $src = Join-Path $ScriptDir "logo.$ext"
-    if (Test-Path $src) {
-        Copy-Item $src "$PUBLIC_DIR\logo.$ext" -Force
-        Write-OK "Copied logo.$ext  ->  $PUBLIC_DIR\logo.$ext"
-        $logoCopied = $true
-    } else {
-        Write-Info "logo.$ext not found next to install.ps1 - add it manually:"
-        Write-Info "  Copy logo.$ext to  $PUBLIC_DIR\logo.$ext"
-    }
-}
-
-if (-not $logoCopied) {
-    Write-Info "No logos copied. MeshCentral will use its default graphics until you add them."
-}
-
-# ──────────────────────────────────────────────────────────────
-#  STEP 6 : Create admin account
-# ──────────────────────────────────────────────────────────────
-Write-Step 6 "Creating MeshCentral admin account"
-
+Write-Step 6 "Creating admin account"
 if (-not $AdminUser)  { $AdminUser  = Read-Host "      Enter admin username" }
 if (-not $AdminEmail) { $AdminEmail = Read-Host "      Enter admin email" }
 $AdminPassSS = Read-Host "      Enter admin password" -AsSecureString
@@ -201,19 +243,16 @@ node node_modules\meshcentral --createaccount $AdminUser --pass $AdminPass --ema
 Write-OK "Admin account '$AdminUser' created"
 
 # ──────────────────────────────────────────────────────────────
-#  STEP 7 : Install & start Windows service
+#  STEP 7 : Windows service
 # ──────────────────────────────────────────────────────────────
 Write-Step 7 "Installing MeshCentral Windows service"
 Set-Location $INSTALL_DIR
 
-# Stop any existing instance first
 $existingSvc = Get-Service MeshCentral -ErrorAction SilentlyContinue
 if ($existingSvc) {
-    Write-Info "Stopping existing MeshCentral service..."
-    node node_modules\meshcentral --stop  2>&1 | Out-Null
-    Start-Sleep 3
-    node node_modules\meshcentral --uninstall 2>&1 | Out-Null
-    Start-Sleep 2
+    Write-Info "Removing existing service..."
+    node node_modules\meshcentral --stop      2>&1 | Out-Null; Start-Sleep 3
+    node node_modules\meshcentral --uninstall 2>&1 | Out-Null; Start-Sleep 2
 }
 
 node node_modules\meshcentral --install
@@ -222,30 +261,24 @@ node node_modules\meshcentral --start
 Start-Sleep 8
 
 $svc = Get-Service MeshCentral -ErrorAction SilentlyContinue
-if ($svc -and $svc.Status -eq "Running") {
-    Write-OK "MeshCentral service is RUNNING"
-} else {
-    Write-Info "Service may still be initialising. To check: sc query MeshCentral"
-}
+if ($svc -and $svc.Status -eq "Running") { Write-OK "MeshCentral service is RUNNING" }
+else { Write-Info "Service starting — check: sc query MeshCentral" }
 
 # ──────────────────────────────────────────────────────────────
-#  STEP 8 : Windows Firewall
+#  STEP 8 : Firewall
 # ──────────────────────────────────────────────────────────────
-Write-Step 8 "Configuring Windows Firewall"
-
-# Remove old rules silently, then re-add
+Write-Step 8 "Windows Firewall"
 netsh advfirewall firewall delete rule name="MeshCentral HTTPS" 2>$null | Out-Null
 netsh advfirewall firewall delete rule name="MeshCentral HTTP"  2>$null | Out-Null
 netsh advfirewall firewall add rule name="MeshCentral HTTPS" dir=in action=allow protocol=TCP localport=443 | Out-Null
 netsh advfirewall firewall add rule name="MeshCentral HTTP"  dir=in action=allow protocol=TCP localport=80  | Out-Null
-Write-OK "Firewall rules added for TCP 443 and 80"
+Write-OK "Firewall rules added (TCP 443 + 80)"
 
 # ──────────────────────────────────────────────────────────────
 #  STEPS 9-13 : Cloudflare Tunnel
 # ──────────────────────────────────────────────────────────────
 if (-not $SkipCloudflare) {
 
-    # ── 9: Install cloudflared ────────────────────────────────
     Write-Step 9 "Installing cloudflared"
     $cfCmd = Get-Command cloudflared -ErrorAction SilentlyContinue
     if (-not $cfCmd) {
@@ -254,55 +287,42 @@ if (-not $SkipCloudflare) {
         if ($LASTEXITCODE -ne 0) { Write-Fail "winget cloudflared install failed." }
         $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
     }
-    $cfVer = (cloudflared --version 2>&1 | Select-Object -First 1)
-    Write-OK "cloudflared ready  ($cfVer)"
+    Write-OK "cloudflared ready  ($( (cloudflared --version 2>&1 | Select-Object -First 1) ))"
 
-    # ── 10: Cloudflare login ──────────────────────────────────
     Write-Step 10 "Cloudflare authentication"
-    Write-Info "A browser window will open. Log in with your Cloudflare account and"
-    Write-Info "select  creationsit.com  to authorise the tunnel."
-    Write-Host ""
-    Read-Host "      Press ENTER when ready to open the browser"
+    Write-Info "A browser window will open. Log in and select creationsit.com"
+    Read-Host "      Press ENTER to open the browser"
     cloudflared tunnel login
     if ($LASTEXITCODE -ne 0) { Write-Fail "Cloudflare login failed." }
-    Write-OK "Authenticated with Cloudflare"
+    Write-OK "Authenticated"
 
-    # ── 11: Create (or reuse) tunnel ──────────────────────────
-    Write-Step 11 "Cloudflare Tunnel  ($TUNNEL_NAME)"
-
+    Write-Step 11 "Cloudflare Tunnel ($TUNNEL_NAME)"
     New-Item -ItemType Directory -Force -Path $CF_CONFIG_DIR | Out-Null
 
-    # If an old tunnel with this name exists, delete it so DNS can be re-pointed
-    $existingTunnel = cloudflared tunnel info $TUNNEL_NAME 2>&1
+    cloudflared tunnel info $TUNNEL_NAME 2>&1 | Out-Null
     if ($LASTEXITCODE -eq 0) {
-        Write-Info "Old tunnel '$TUNNEL_NAME' found - deleting so we can create a fresh one..."
+        Write-Info "Deleting old tunnel '$TUNNEL_NAME'..."
         cloudflared tunnel delete $TUNNEL_NAME --force 2>&1 | Out-Null
         Start-Sleep 2
     }
 
     $createOut = (cloudflared tunnel create $TUNNEL_NAME 2>&1) -join " "
-    if ($LASTEXITCODE -ne 0) { Write-Fail "cloudflared tunnel create failed: $createOut" }
+    if ($LASTEXITCODE -ne 0) { Write-Fail "tunnel create failed: $createOut" }
 
-    # Extract UUID from output  e.g. "Created tunnel meshcentral with id abc123..."
     $tunnelId = ""
     if ($createOut -match "([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})") {
         $tunnelId = $Matches[1]
     }
     if (-not $tunnelId) { Write-Fail "Could not extract Tunnel ID from: $createOut" }
-    Write-OK "Tunnel created: $TUNNEL_NAME  (ID: $tunnelId)"
+    Write-OK "Tunnel created: $TUNNEL_NAME  ($tunnelId)"
 
-    # ── 12: DNS record ────────────────────────────────────────
-    Write-Step 12 "DNS record  ($DOMAIN)"
+    Write-Step 12 "DNS record ($DOMAIN)"
     cloudflared tunnel route dns $TUNNEL_NAME $DOMAIN
-    if ($LASTEXITCODE -ne 0) { Write-Fail "Failed to create DNS record. Check Cloudflare dashboard." }
-    Write-OK "DNS record created  $DOMAIN  ->  $TUNNEL_NAME"
+    if ($LASTEXITCODE -ne 0) { Write-Fail "DNS record creation failed." }
+    Write-OK "DNS: $DOMAIN -> $TUNNEL_NAME"
 
-    # ── 13: Write config.yml ──────────────────────────────────
-    Write-Step 13 "Cloudflare tunnel config.yml"
-
-    # Credentials file is written by cloudflared to the current user's profile
-    $credFile = "$env:USERPROFILE\.cloudflared\$tunnelId.json"
-
+    Write-Step 13 "Cloudflare tunnel config + service"
+    $credFile = ($env:USERPROFILE + "\.cloudflared\" + $tunnelId + ".json") -replace '\\', '\\'
     $cfYml = @"
 tunnel: $tunnelId
 credentials-file: $credFile
@@ -314,27 +334,19 @@ ingress:
       noTLSVerify: true
   - service: http_status:404
 "@
-
     $cfYml | Out-File -FilePath "$CF_CONFIG_DIR\config.yml" -Encoding utf8
-    Write-OK "Config written to $CF_CONFIG_DIR\config.yml"
 
-    # ── 13b: Install cloudflared as a Windows service ─────────
-    Write-Info "Installing cloudflared as Windows service (auto-starts on reboot)..."
     cloudflared --config "$CF_CONFIG_DIR\config.yml" service install
     if ($LASTEXITCODE -ne 0) { Write-Fail "cloudflared service install failed." }
-
     Start-Service cloudflared -ErrorAction SilentlyContinue
     Start-Sleep 3
 
     $cfSvc = Get-Service cloudflared -ErrorAction SilentlyContinue
-    if ($cfSvc -and $cfSvc.Status -eq "Running") {
-        Write-OK "Cloudflare tunnel service is RUNNING"
-    } else {
-        Write-Info "Tunnel service may still be starting.  sc query cloudflared  to check."
-    }
+    if ($cfSvc -and $cfSvc.Status -eq "Running") { Write-OK "Cloudflare tunnel service RUNNING" }
+    else { Write-Info "Check: sc query cloudflared" }
 
 } else {
-    Write-Info "Skipping Cloudflare setup (-SkipCloudflare flag set)"
+    Write-Info "Skipping Cloudflare setup (-SkipCloudflare)"
 }
 
 # ──────────────────────────────────────────────────────────────
@@ -350,14 +362,12 @@ Write-Host "    Admin  : $AdminUser" -ForegroundColor Cyan
 Write-Host "    Data   : $DATA_DIR" -ForegroundColor Gray
 Write-Host ""
 Write-Host "    Next steps:" -ForegroundColor Yellow
-Write-Host "      1. Open https://$DOMAIN and confirm the login page loads" -ForegroundColor White
-Write-Host "      2. Log in, go to My Account > Two Factor Authentication" -ForegroundColor White
+Write-Host "      1. Open https://$DOMAIN and confirm Creations IT login page" -ForegroundColor White
+Write-Host "      2. My Account > Two Factor Authentication" -ForegroundColor White
 Write-Host "      3. Create device groups: Servers / Workstations / Clients" -ForegroundColor White
-Write-Host "      4. Add agents via Devices > Add Agent > Windows" -ForegroundColor White
-Write-Host "      5. Drop logo.png + logo.ico into $PUBLIC_DIR\ if not done yet" -ForegroundColor White
-Write-Host "      6. Back up $DATA_DIR regularly" -ForegroundColor White
+Write-Host "      4. Devices > Add Agent > Windows — verify agent shows Creations IT branding" -ForegroundColor White
+Write-Host "      5. Back up $DATA_DIR regularly" -ForegroundColor White
 Write-Host ""
-Write-Host "    Services to verify:" -ForegroundColor Yellow
-Write-Host "      sc query MeshCentral" -ForegroundColor Gray
-Write-Host "      sc query cloudflared" -ForegroundColor Gray
+Write-Host "    To update branding only (no reinstall):" -ForegroundColor Yellow
+Write-Host "      .\install.ps1 -UpdateOnly" -ForegroundColor Gray
 Write-Host ""
