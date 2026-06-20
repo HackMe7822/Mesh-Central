@@ -228,23 +228,23 @@ if (Test-Path $logoSrc) {
     Write-OK "Downloaded $LOGO_FILE"
 }
 
-# Convert ICO to PNG for agent installer dialog image
+# Convert ICO to PNG using WPF WIC (handles PNG-compressed ICO frames correctly)
 try {
-    Add-Type -AssemblyName System.Drawing
-    $ico     = New-Object System.Drawing.Icon("$DATA_DIR\$LOGO_FILE")
-    $bmp     = $ico.ToBitmap()
-    $resized = New-Object System.Drawing.Bitmap(200, 200)
-    $g       = [System.Drawing.Graphics]::FromImage($resized)
-    $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-    $g.DrawImage($bmp, 0, 0, 200, 200)
-    $g.Dispose(); $bmp.Dispose(); $ico.Dispose()
-    $pngPath = "$DATA_DIR\CreationsIT.png"
-    $resized.Save($pngPath, [System.Drawing.Imaging.ImageFormat]::Png)
-    $resized.Dispose()
-    Write-OK "Converted $LOGO_FILE to CreationsIT.png (agent dialog image)"
+    Add-Type -AssemblyName PresentationCore
+    $decoder = New-Object System.Windows.Media.Imaging.IconBitmapDecoder(
+        (New-Object System.Uri("$DATA_DIR\$LOGO_FILE")),
+        [System.Windows.Media.Imaging.BitmapCreateOptions]::PreservePixelFormat,
+        [System.Windows.Media.Imaging.BitmapCacheOption]::OnLoad
+    )
+    $frame   = $decoder.Frames | Sort-Object { $_.PixelWidth } -Descending | Select-Object -First 1
+    $encoder = New-Object System.Windows.Media.Imaging.PngBitmapEncoder
+    $encoder.Frames.Add([System.Windows.Media.Imaging.BitmapFrame]::Create($frame))
+    $stream  = New-Object System.IO.FileStream("$DATA_DIR\CreationsIT.png", [System.IO.FileMode]::Create)
+    $encoder.Save($stream)
+    $stream.Close()
+    Write-OK "Converted $LOGO_FILE -> CreationsIT.png (agent dialog image)"
 } catch {
     Write-Info "PNG conversion skipped: $_"
-    $pngPath = $null
 }
 
 # --------------------------------------------------------------
