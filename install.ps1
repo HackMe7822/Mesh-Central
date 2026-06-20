@@ -108,7 +108,8 @@ if ($UpdateOnly) {
         "displayname": "$BRAND_NAME Remote Support",
         "description": "$BRAND_NAME Remote Management Agent",
         "companyname": "$BRAND_NAME",
-        "filename": "CreationsIT-Agent"
+        "filename": "CreationsIT-Agent",
+        "image": "CreationsIT.png"
       },
       "agentFileInfo": {
         "icon": "$LOGO_FILE",
@@ -219,12 +220,31 @@ $logoSrc = Join-Path $ScriptDir $LOGO_FILE
 if (Test-Path $logoSrc) {
     Copy-Item $logoSrc "$PUBLIC_DIR\$LOGO_FILE" -Force
     Copy-Item $logoSrc "$DATA_DIR\$LOGO_FILE"   -Force
-    Write-OK "Copied $LOGO_FILE to public\ and data root (agent patching)"
+    Write-OK "Copied $LOGO_FILE to public\ and data root"
 } else {
     Write-Info "Downloading $LOGO_FILE from GitHub..."
     Invoke-WebRequest -Uri $LOGO_RAW_URL -OutFile "$PUBLIC_DIR\$LOGO_FILE" -UseBasicParsing
     Copy-Item "$PUBLIC_DIR\$LOGO_FILE" "$DATA_DIR\$LOGO_FILE" -Force
-    Write-OK "Downloaded $LOGO_FILE to public\ and data root (agent patching)"
+    Write-OK "Downloaded $LOGO_FILE"
+}
+
+# Convert ICO to PNG for agent installer dialog image
+try {
+    Add-Type -AssemblyName System.Drawing
+    $ico     = New-Object System.Drawing.Icon("$DATA_DIR\$LOGO_FILE")
+    $bmp     = $ico.ToBitmap()
+    $resized = New-Object System.Drawing.Bitmap(200, 200)
+    $g       = [System.Drawing.Graphics]::FromImage($resized)
+    $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+    $g.DrawImage($bmp, 0, 0, 200, 200)
+    $g.Dispose(); $bmp.Dispose(); $ico.Dispose()
+    $pngPath = "$DATA_DIR\CreationsIT.png"
+    $resized.Save($pngPath, [System.Drawing.Imaging.ImageFormat]::Png)
+    $resized.Dispose()
+    Write-OK "Converted $LOGO_FILE to CreationsIT.png (agent dialog image)"
+} catch {
+    Write-Info "PNG conversion skipped: $_"
+    $pngPath = $null
 }
 
 # --------------------------------------------------------------
@@ -249,7 +269,8 @@ $configJson = @"
         "displayname": "$BRAND_NAME Remote Support",
         "description": "$BRAND_NAME Remote Management Agent",
         "companyname": "$BRAND_NAME",
-        "filename": "CreationsIT-Agent"
+        "filename": "CreationsIT-Agent",
+        "image": "CreationsIT.png"
       },
       "agentFileInfo": {
         "icon": "$LOGO_FILE",
