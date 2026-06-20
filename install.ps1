@@ -360,20 +360,20 @@ if (-not $SkipCloudflare) {
         Write-OK "Authenticated"
     }
 
-    Write-Step 11 "Cloudflare Tunnel ($TUNNEL_NAME)"
+    Write-Step 11 "Cloudflare Tunnel ($TunnelName)"
     New-Item -ItemType Directory -Force -Path $CF_CONFIG_DIR | Out-Null
 
     # Delete existing tunnel with same name if it exists (cleanup connections first)
-    cmd /c "cloudflared tunnel info $TUNNEL_NAME >nul 2>&1"
+    cmd /c "cloudflared tunnel info $TunnelName >nul 2>&1"
     if ($LASTEXITCODE -eq 0) {
         Write-Info "Old tunnel found - cleaning up and deleting..."
-        cmd /c "cloudflared tunnel cleanup $TUNNEL_NAME >nul 2>&1"
+        cmd /c "cloudflared tunnel cleanup $TunnelName >nul 2>&1"
         Start-Sleep 2
-        cmd /c "cloudflared tunnel delete $TUNNEL_NAME >nul 2>&1"
+        cmd /c "cloudflared tunnel delete $TunnelName >nul 2>&1"
         Start-Sleep 2
     }
 
-    $createOut = (cmd /c "cloudflared tunnel create $TUNNEL_NAME 2>&1")
+    $createOut = (cmd /c "cloudflared tunnel create $TunnelName 2>&1")
     $createOut = ($createOut -join " ")
     if ($LASTEXITCODE -ne 0) { Write-Fail "tunnel create failed: $createOut" }
 
@@ -382,12 +382,12 @@ if (-not $SkipCloudflare) {
         $tunnelId = $Matches[1]
     }
     if (-not $tunnelId) { Write-Fail "Could not extract Tunnel ID from: $createOut" }
-    Write-OK "Tunnel created: $TUNNEL_NAME  ($tunnelId)"
+    Write-OK "Tunnel created: $TunnelName  ($tunnelId)"
 
     Write-Step 12 "DNS record ($DOMAIN)"
-    $dnsOut = (cmd /c "cloudflared tunnel route dns $TUNNEL_NAME $DOMAIN 2>&1") -join " "
+    $dnsOut = (cmd /c "cloudflared tunnel route dns $TunnelName $DOMAIN 2>&1") -join " "
     if ($LASTEXITCODE -ne 0) { Write-Fail "DNS record creation failed: $dnsOut" }
-    Write-OK "DNS: $DOMAIN -> $TUNNEL_NAME"
+    Write-OK "DNS: $DOMAIN -> $TunnelName"
 
     Write-Step 13 "Cloudflare tunnel config + service"
     $credFile = "C:\Users\Administrator\.cloudflared\$tunnelId.json"
