@@ -27,8 +27,6 @@
 param(
     [string]$Domain     = "remote.creationsit.com",
     [string]$TunnelName = "creationsit-vm",
-    [string]$AdminUser  = "",
-    [string]$AdminEmail = "",
     [string]$InstallDir = "",
     [switch]$SkipCloudflare,
     [switch]$SkipNodeInstall,
@@ -260,24 +258,9 @@ $configJson | Out-File -FilePath "$DATA_DIR\config.json" -Encoding utf8
 Write-OK "config.json written to $DATA_DIR\config.json"
 
 # --------------------------------------------------------------
-#  STEP 6 : Admin account
+#  STEP 6 : Windows service
 # --------------------------------------------------------------
-Write-Step 6 "Creating admin account"
-if (-not $AdminUser)  { $AdminUser  = Read-Host "      Enter admin username" }
-if (-not $AdminEmail) { $AdminEmail = Read-Host "      Enter admin email" }
-$AdminPassSS = Read-Host "      Enter admin password" -AsSecureString
-$bstr        = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($AdminPassSS)
-$AdminPass   = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
-[System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
-
-Set-Location $INSTALL_DIR
-node node_modules\meshcentral --createaccount $AdminUser --pass $AdminPass --email $AdminEmail --adminaccount true 2>&1 | Out-Null
-Write-OK "Admin account '$AdminUser' created"
-
-# --------------------------------------------------------------
-#  STEP 7 : Windows service
-# --------------------------------------------------------------
-Write-Step 7 "Installing MeshCentral Windows service"
+Write-Step 6 "Installing MeshCentral Windows service"
 Set-Location $INSTALL_DIR
 
 $existingSvc = Get-Service MeshCentral -ErrorAction SilentlyContinue
@@ -297,9 +280,9 @@ if ($svc -and $svc.Status -eq "Running") { Write-OK "MeshCentral service is RUNN
 else { Write-Info "Service starting - check: sc query MeshCentral" }
 
 # --------------------------------------------------------------
-#  STEP 8 : Firewall
+#  STEP 7 : Firewall
 # --------------------------------------------------------------
-Write-Step 8 "Windows Firewall"
+Write-Step 7 "Windows Firewall"
 netsh advfirewall firewall delete rule name="MeshCentral HTTPS" 2>$null | Out-Null
 netsh advfirewall firewall delete rule name="MeshCentral HTTP"  2>$null | Out-Null
 netsh advfirewall firewall add rule name="MeshCentral HTTPS" dir=in action=allow protocol=TCP localport=443 | Out-Null
@@ -307,11 +290,11 @@ netsh advfirewall firewall add rule name="MeshCentral HTTP"  dir=in action=allow
 Write-OK "Firewall rules added (TCP 443 + 80)"
 
 # --------------------------------------------------------------
-#  STEPS 9-13 : Cloudflare Tunnel
+#  STEPS 8-12 : Cloudflare Tunnel
 # --------------------------------------------------------------
 if (-not $SkipCloudflare) {
 
-    Write-Step 9 "Installing cloudflared (always latest - no version warnings)"
+    Write-Step 8 "Installing cloudflared (always latest - no version warnings)"
     Write-Info "Downloading latest cloudflared MSI..."
     $cfMsiUrl  = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.msi"
     $cfMsiPath = "$env:TEMP\cloudflared.msi"
@@ -330,7 +313,7 @@ if (-not $SkipCloudflare) {
     if (-not $cfCmd) { Write-Fail "cloudflared not found after install." }
     Write-OK "cloudflared installed"
 
-    Write-Step 10 "Cloudflare authentication"
+    Write-Step 9 "Cloudflare authentication"
     # Check multiple possible cert locations - $env:USERPROFILE can differ in iex context
     $certPem = $null
     foreach ($p in @(
@@ -359,7 +342,7 @@ if (-not $SkipCloudflare) {
         Write-OK "Authenticated"
     }
 
-    Write-Step 11 "Cloudflare Tunnel ($TunnelName)"
+    Write-Step 10 "Cloudflare Tunnel ($TunnelName)"
     New-Item -ItemType Directory -Force -Path $CF_CONFIG_DIR | Out-Null
 
     # Delete existing tunnel with same name if it exists (cleanup connections first)
@@ -383,12 +366,12 @@ if (-not $SkipCloudflare) {
     if (-not $tunnelId) { Write-Fail "Could not extract Tunnel ID from: $createOut" }
     Write-OK "Tunnel created: $TunnelName  ($tunnelId)"
 
-    Write-Step 12 "DNS record ($DOMAIN)"
+    Write-Step 11 "DNS record ($DOMAIN)"
     $dnsOut = (cmd /c "cloudflared tunnel route dns $TunnelName $DOMAIN 2>&1") -join " "
     if ($LASTEXITCODE -ne 0) { Write-Fail "DNS record creation failed: $dnsOut" }
     Write-OK "DNS: $DOMAIN -> $TunnelName"
 
-    Write-Step 13 "Cloudflare tunnel config + service"
+    Write-Step 12 "Cloudflare tunnel config + service"
     $credFile = "C:\Users\Administrator\.cloudflared\$tunnelId.json"
     # One tunnel handles ALL subdomains on this VM.
     # To add a new app later:
@@ -466,16 +449,16 @@ Write-Host "  ============================================" -ForegroundColor Gre
 Write-Host "    DEPLOYMENT COMPLETE" -ForegroundColor Green
 Write-Host "  ============================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "    URL    : https://$DOMAIN" -ForegroundColor Cyan
-Write-Host "    Admin  : $AdminUser" -ForegroundColor Cyan
+Write-Host "    URL    : https://$Domain" -ForegroundColor Cyan
 Write-Host "    Data   : $DATA_DIR" -ForegroundColor Gray
 Write-Host ""
 Write-Host "    Next steps:" -ForegroundColor Yellow
-Write-Host "      1. Open https://$DOMAIN and confirm Creations IT login page" -ForegroundColor White
-Write-Host "      2. My Account > Two Factor Authentication" -ForegroundColor White
-Write-Host "      3. Create device groups: Servers / Workstations / Clients" -ForegroundColor White
-Write-Host "      4. Devices > Add Agent > Windows - verify agent shows Creations IT branding" -ForegroundColor White
-Write-Host "      5. Back up $DATA_DIR regularly" -ForegroundColor White
+Write-Host "      1. Open https://$Domain - first visit shows Create Account page" -ForegroundColor White
+Write-Host "      2. Create your admin account - first account is automatically site admin" -ForegroundColor White
+Write-Host "      3. My Account > Two Factor Authentication" -ForegroundColor White
+Write-Host "      4. Create device groups: Servers / Workstations / Clients" -ForegroundColor White
+Write-Host "      5. Devices > Add Agent > Windows - verify agent shows Creations IT branding" -ForegroundColor White
+Write-Host "      6. Back up $DATA_DIR regularly" -ForegroundColor White
 Write-Host ""
 Write-Host "    To update branding only (no reinstall):" -ForegroundColor Yellow
 Write-Host "      .\install.ps1 -UpdateOnly" -ForegroundColor Gray
