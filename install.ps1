@@ -28,7 +28,7 @@ param(
     [switch]$UpdateOnly
 )
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
 
 # ──────────────────────────────────────────────────────────────
 #  CONFIGURATION
@@ -330,19 +330,24 @@ if (-not $SkipCloudflare) {
     Write-OK "cloudflared ready  ($( (cloudflared --version 2>&1 | Select-Object -First 1) ))"
 
     Write-Step 10 "Cloudflare authentication"
-    Write-Info "A browser window will open. Log in and select creationsit.com"
-    Read-Host "      Press ENTER to open the browser"
-    cloudflared tunnel login
-    if ($LASTEXITCODE -ne 0) { Write-Fail "Cloudflare login failed." }
-    Write-OK "Authenticated"
+    $certPem = "$env:USERPROFILE\.cloudflared\cert.pem"
+    if (Test-Path $certPem) {
+        Write-OK "Already authenticated (cert.pem exists — skipping login)"
+    } else {
+        Write-Info "A browser window will open. Log in and select creationsit.com"
+        Read-Host "      Press ENTER to open the browser"
+        cloudflared tunnel login 2>&1 | ForEach-Object { Write-Host "      $_" }
+        if (-not (Test-Path $certPem)) { Write-Fail "Cloudflare login failed — cert.pem not created." }
+        Write-OK "Authenticated"
+    }
 
     Write-Step 11 "Cloudflare Tunnel ($TUNNEL_NAME)"
     New-Item -ItemType Directory -Force -Path $CF_CONFIG_DIR | Out-Null
 
-    cloudflared tunnel info $TUNNEL_NAME 2>&1 | Out-Null
+    $null = cloudflared tunnel info $TUNNEL_NAME 2>&1
     if ($LASTEXITCODE -eq 0) {
         Write-Info "Deleting old tunnel '$TUNNEL_NAME'..."
-        cloudflared tunnel delete $TUNNEL_NAME --force 2>&1 | Out-Null
+        $null = cloudflared tunnel delete $TUNNEL_NAME --force 2>&1
         Start-Sleep 2
     }
 
@@ -357,8 +362,8 @@ if (-not $SkipCloudflare) {
     Write-OK "Tunnel created: $TUNNEL_NAME  ($tunnelId)"
 
     Write-Step 12 "DNS record ($DOMAIN)"
-    cloudflared tunnel route dns $TUNNEL_NAME $DOMAIN
-    if ($LASTEXITCODE -ne 0) { Write-Fail "DNS record creation failed." }
+    $dnsOut = (cloudflared tunnel route dns $TUNNEL_NAME $DOMAIN 2>&1) -join " "
+    if ($LASTEXITCODE -ne 0) { Write-Fail "DNS record creation failed: $dnsOut" }
     Write-OK "DNS: $DOMAIN -> $TUNNEL_NAME"
 
     Write-Step 13 "Cloudflare tunnel config + service"
@@ -376,8 +381,8 @@ ingress:
 "@
     $cfYml | Out-File -FilePath "$CF_CONFIG_DIR\config.yml" -Encoding utf8
 
-    cloudflared --config "$CF_CONFIG_DIR\config.yml" service install
-    if ($LASTEXITCODE -ne 0) { Write-Fail "cloudflared service install failed." }
+    $svcOut = (cloudflared --config "$CF_CONFIG_DIR\config.yml" service install 2>&1) -join " "
+    if ($LASTEXITCODE -ne 0) { Write-Fail "cloudflared service install failed: $svcOut" }
     Start-Service cloudflared -ErrorAction SilentlyContinue
     Start-Sleep 3
 
