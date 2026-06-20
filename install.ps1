@@ -14,11 +14,15 @@
         -SkipCloudflare     Skip Cloudflare tunnel setup (already configured)
         -SkipNodeInstall    Skip Node.js install (already installed)
         -UpdateOnly         Only refresh config.json + branding, restart service — no reinstall
+        -InstallDir         Override install path (default: C:\MeshCentral)
+                            Example for existing installs:
+                            .\install.ps1 -UpdateOnly -InstallDir "C:\Program Files\Open Source\MeshCentral"
 #>
 
 param(
     [string]$AdminUser  = "",
     [string]$AdminEmail = "",
+    [string]$InstallDir = "",
     [switch]$SkipCloudflare,
     [switch]$SkipNodeInstall,
     [switch]$UpdateOnly
@@ -29,7 +33,7 @@ $ErrorActionPreference = "Stop"
 # ──────────────────────────────────────────────────────────────
 #  CONFIGURATION
 # ──────────────────────────────────────────────────────────────
-$INSTALL_DIR   = "C:\MeshCentral"
+$INSTALL_DIR   = if ($InstallDir) { $InstallDir } else { "C:\MeshCentral" }
 $DATA_DIR      = "$INSTALL_DIR\meshcentral-data"
 $PUBLIC_DIR    = "$DATA_DIR\public"
 $CF_CONFIG_DIR = "C:\cloudflared"
