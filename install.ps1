@@ -13,7 +13,7 @@
     Re-run flags:
         -SkipCloudflare     Skip Cloudflare tunnel setup (already configured)
         -SkipNodeInstall    Skip Node.js install (already installed)
-        -UpdateOnly         Only refresh config.json + branding, restart service — no reinstall
+        -UpdateOnly         Only refresh config.json + branding, restart service - no reinstall
         -InstallDir         Override install path (default: C:\MeshCentral)
                             Example for existing installs:
                             .\install.ps1 -UpdateOnly -InstallDir "C:\Program Files\Open Source\MeshCentral"
@@ -30,9 +30,9 @@ param(
 
 $ErrorActionPreference = "Continue"
 
-# ──────────────────────────────────────────────────────────────
+# --------------------------------------------------------------
 #  CONFIGURATION
-# ──────────────────────────────────────────────────────────────
+# --------------------------------------------------------------
 $INSTALL_DIR   = if ($InstallDir) { $InstallDir } else { "C:\MeshCentral" }
 $DATA_DIR      = "$INSTALL_DIR\meshcentral-data"
 $PUBLIC_DIR    = "$DATA_DIR\public"
@@ -43,7 +43,7 @@ $BRAND_NAME    = "Creations IT"
 $BRAND_TITLE2  = "Remote Support"
 $LOGO_FILE     = "CreationsIT.ico"
 $LOGO_RAW_URL  = "https://raw.githubusercontent.com/HackMe7822/Mesh-Central/main/CreationsIT.ico"
-# ──────────────────────────────────────────────────────────────
+# --------------------------------------------------------------
 
 function Write-Banner {
     Write-Host ""
@@ -68,9 +68,9 @@ if (-not $isPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administ
 # Resolve script directory (works both from file and from iex pipe)
 if ($PSScriptRoot) { $ScriptDir = $PSScriptRoot } else { $ScriptDir = $PWD.Path }
 
-# ──────────────────────────────────────────────────────────────
+# --------------------------------------------------------------
 #  -UpdateOnly : refresh config + branding only, then exit
-# ──────────────────────────────────────────────────────────────
+# --------------------------------------------------------------
 if ($UpdateOnly) {
     Write-Host "  [UPDATE ONLY MODE]" -ForegroundColor Magenta
 
@@ -87,7 +87,7 @@ if ($UpdateOnly) {
     }
 
     Write-Step 2 "Refreshing config.json"
-    # (config written below — fall through to write block, then restart)
+    # (config written below - fall through to write block, then restart)
     $iconFilePath = ($DATA_DIR + "\public\" + $LOGO_FILE) -replace '\\', '\\\\'
     $configJson = @"
 {
@@ -132,9 +132,9 @@ if ($UpdateOnly) {
     exit 0
 }
 
-# ──────────────────────────────────────────────────────────────
+# --------------------------------------------------------------
 #  STEP 1 : Node.js
-# ──────────────────────────────────────────────────────────────
+# --------------------------------------------------------------
 Write-Step 1 "Node.js LTS"
 
 function Refresh-Path {
@@ -175,22 +175,22 @@ if ($nodeOk) {
         $env:Path = "$nodeDir;" + $env:Path
     }
     $nodeVer = (node --version 2>$null)
-    if (-not $nodeVer) { Write-Fail "Node.js still not found — try rebooting then re-run with -SkipNodeInstall." }
+    if (-not $nodeVer) { Write-Fail "Node.js still not found - try rebooting then re-run with -SkipNodeInstall." }
     Write-OK "Node.js $nodeVer installed"
 }
 
-# ──────────────────────────────────────────────────────────────
+# --------------------------------------------------------------
 #  STEP 2 : Directories
-# ──────────────────────────────────────────────────────────────
+# --------------------------------------------------------------
 Write-Step 2 "Creating directories"
 New-Item -ItemType Directory -Force -Path $INSTALL_DIR | Out-Null
 New-Item -ItemType Directory -Force -Path $DATA_DIR    | Out-Null
 New-Item -ItemType Directory -Force -Path $PUBLIC_DIR  | Out-Null
 Write-OK "Directories ready under $INSTALL_DIR"
 
-# ──────────────────────────────────────────────────────────────
+# --------------------------------------------------------------
 #  STEP 3 : Install MeshCentral
-# ──────────────────────────────────────────────────────────────
+# --------------------------------------------------------------
 Write-Step 3 "Installing MeshCentral"
 Set-Location $INSTALL_DIR
 if (Test-Path "$INSTALL_DIR\node_modules\meshcentral") {
@@ -202,9 +202,9 @@ if (Test-Path "$INSTALL_DIR\node_modules\meshcentral") {
     Write-OK "MeshCentral installed"
 }
 
-# ──────────────────────────────────────────────────────────────
+# --------------------------------------------------------------
 #  STEP 4 : Branding logo
-# ──────────────────────────────────────────────────────────────
+# --------------------------------------------------------------
 Write-Step 4 "Branding logo ($LOGO_FILE)"
 $logoSrc = Join-Path $ScriptDir $LOGO_FILE
 if (Test-Path $logoSrc) {
@@ -216,12 +216,12 @@ if (Test-Path $logoSrc) {
     Write-OK "Downloaded $LOGO_FILE to $PUBLIC_DIR\"
 }
 
-# ──────────────────────────────────────────────────────────────
+# --------------------------------------------------------------
 #  STEP 5 : config.json
 #
 #  IMPORTANT: agentCustomization MUST live in "settings" (not "domains")
 #  for MeshCentral to patch the agent binary with the custom icon + title.
-# ──────────────────────────────────────────────────────────────
+# --------------------------------------------------------------
 Write-Step 5 "Writing config.json"
 $iconFilePath = ($DATA_DIR + "\public\" + $LOGO_FILE) -replace '\\', '\\\\'
 
@@ -254,9 +254,9 @@ $configJson = @"
 $configJson | Out-File -FilePath "$DATA_DIR\config.json" -Encoding utf8
 Write-OK "config.json written to $DATA_DIR\config.json"
 
-# ──────────────────────────────────────────────────────────────
+# --------------------------------------------------------------
 #  STEP 6 : Admin account
-# ──────────────────────────────────────────────────────────────
+# --------------------------------------------------------------
 Write-Step 6 "Creating admin account"
 if (-not $AdminUser)  { $AdminUser  = Read-Host "      Enter admin username" }
 if (-not $AdminEmail) { $AdminEmail = Read-Host "      Enter admin email" }
@@ -269,9 +269,9 @@ Set-Location $INSTALL_DIR
 node node_modules\meshcentral --createaccount $AdminUser --pass $AdminPass --email $AdminEmail --adminaccount true 2>&1 | Out-Null
 Write-OK "Admin account '$AdminUser' created"
 
-# ──────────────────────────────────────────────────────────────
+# --------------------------------------------------------------
 #  STEP 7 : Windows service
-# ──────────────────────────────────────────────────────────────
+# --------------------------------------------------------------
 Write-Step 7 "Installing MeshCentral Windows service"
 Set-Location $INSTALL_DIR
 
@@ -289,11 +289,11 @@ Start-Sleep 8
 
 $svc = Get-Service MeshCentral -ErrorAction SilentlyContinue
 if ($svc -and $svc.Status -eq "Running") { Write-OK "MeshCentral service is RUNNING" }
-else { Write-Info "Service starting — check: sc query MeshCentral" }
+else { Write-Info "Service starting - check: sc query MeshCentral" }
 
-# ──────────────────────────────────────────────────────────────
+# --------------------------------------------------------------
 #  STEP 8 : Firewall
-# ──────────────────────────────────────────────────────────────
+# --------------------------------------------------------------
 Write-Step 8 "Windows Firewall"
 netsh advfirewall firewall delete rule name="MeshCentral HTTPS" 2>$null | Out-Null
 netsh advfirewall firewall delete rule name="MeshCentral HTTP"  2>$null | Out-Null
@@ -301,9 +301,9 @@ netsh advfirewall firewall add rule name="MeshCentral HTTPS" dir=in action=allow
 netsh advfirewall firewall add rule name="MeshCentral HTTP"  dir=in action=allow protocol=TCP localport=80  | Out-Null
 Write-OK "Firewall rules added (TCP 443 + 80)"
 
-# ──────────────────────────────────────────────────────────────
+# --------------------------------------------------------------
 #  STEPS 9-13 : Cloudflare Tunnel
-# ──────────────────────────────────────────────────────────────
+# --------------------------------------------------------------
 if (-not $SkipCloudflare) {
 
     Write-Step 9 "Installing cloudflared"
@@ -330,7 +330,7 @@ if (-not $SkipCloudflare) {
     Write-OK "cloudflared ready  ($( (cloudflared --version 2>&1 | Select-Object -First 1) ))"
 
     Write-Step 10 "Cloudflare authentication"
-    # Check multiple possible cert locations — $env:USERPROFILE can differ in iex context
+    # Check multiple possible cert locations - $env:USERPROFILE can differ in iex context
     $certPem = $null
     foreach ($p in @(
         "$env:USERPROFILE\.cloudflared\cert.pem",
@@ -354,7 +354,7 @@ if (-not $SkipCloudflare) {
         )) {
             if (Test-Path $p -ErrorAction SilentlyContinue) { $certPem = $p; break }
         }
-        if (-not $certPem) { Write-Fail "Cloudflare login failed — cert.pem not found." }
+        if (-not $certPem) { Write-Fail "Cloudflare login failed - cert.pem not found." }
         Write-OK "Authenticated"
     }
 
@@ -413,9 +413,9 @@ ingress:
     Write-Info "Skipping Cloudflare setup (-SkipCloudflare)"
 }
 
-# ──────────────────────────────────────────────────────────────
+# --------------------------------------------------------------
 #  DONE
-# ──────────────────────────────────────────────────────────────
+# --------------------------------------------------------------
 Write-Host ""
 Write-Host "  ============================================" -ForegroundColor Green
 Write-Host "    DEPLOYMENT COMPLETE" -ForegroundColor Green
@@ -429,7 +429,7 @@ Write-Host "    Next steps:" -ForegroundColor Yellow
 Write-Host "      1. Open https://$DOMAIN and confirm Creations IT login page" -ForegroundColor White
 Write-Host "      2. My Account > Two Factor Authentication" -ForegroundColor White
 Write-Host "      3. Create device groups: Servers / Workstations / Clients" -ForegroundColor White
-Write-Host "      4. Devices > Add Agent > Windows — verify agent shows Creations IT branding" -ForegroundColor White
+Write-Host "      4. Devices > Add Agent > Windows - verify agent shows Creations IT branding" -ForegroundColor White
 Write-Host "      5. Back up $DATA_DIR regularly" -ForegroundColor White
 Write-Host ""
 Write-Host "    To update branding only (no reinstall):" -ForegroundColor Yellow
