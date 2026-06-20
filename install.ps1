@@ -97,20 +97,19 @@ if ($UpdateOnly) {
     "cert": "$Domain",
     "SQLite3": true,
     "port": 443,
-    "redirPort": 80,
-    "agentCustomization": {
-      "displayName": "$BRAND_NAME Remote Support",
-      "description": "$BRAND_NAME Remote Management Agent",
-      "companyName": "$BRAND_NAME",
-      "fileName": "CreationsIT-Agent",
-      "iconFile": "$LOGO_FILE"
-    }
+    "redirPort": 80
   },
   "domains": {
     "": {
       "title": "$BRAND_NAME Remote Support",
       "title2": "$BRAND_NAME",
       "newAccounts": false,
+      "agentcustomization": {
+        "displayname": "$BRAND_NAME Remote Support",
+        "description": "$BRAND_NAME Remote Management Agent",
+        "companyname": "$BRAND_NAME",
+        "filename": "CreationsIT-Agent"
+      },
       "agentFileInfo": {
         "icon": "$LOGO_FILE",
         "filedescription": "$BRAND_NAME Remote Agent",
@@ -147,7 +146,7 @@ if ($UpdateOnly) {
 # --------------------------------------------------------------
 Write-Step 1 "Node.js LTS"
 
-function Refresh-Path {
+function Update-EnvPath {
     $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" +
                 [System.Environment]::GetEnvironmentVariable("Path","User")
 }
@@ -179,7 +178,7 @@ if ($nodeOk) {
     Start-Process msiexec.exe -Wait -ArgumentList "/i `"$nodeMsiPath`" /qn ADDLOCAL=ALL"
     Remove-Item $nodeMsiPath -Force -ErrorAction SilentlyContinue
 
-    Refresh-Path
+    Update-EnvPath
     $nodeDir = "C:\Program Files\nodejs"
     if ((Test-Path $nodeDir) -and ($env:Path -notlike "*$nodeDir*")) {
         $env:Path = "$nodeDir;" + $env:Path
@@ -239,20 +238,19 @@ $configJson = @"
     "cert": "$Domain",
     "SQLite3": true,
     "port": 443,
-    "redirPort": 80,
-    "agentCustomization": {
-      "displayName": "$BRAND_NAME Remote Support",
-      "description": "$BRAND_NAME Remote Management Agent",
-      "companyName": "$BRAND_NAME",
-      "fileName": "CreationsIT-Agent",
-      "iconFile": "$LOGO_FILE"
-    }
+    "redirPort": 80
   },
   "domains": {
     "": {
       "title": "$BRAND_NAME Remote Support",
       "title2": "$BRAND_NAME",
       "newAccounts": false,
+      "agentcustomization": {
+        "displayname": "$BRAND_NAME Remote Support",
+        "description": "$BRAND_NAME Remote Management Agent",
+        "companyname": "$BRAND_NAME",
+        "filename": "CreationsIT-Agent"
+      },
       "agentFileInfo": {
         "icon": "$LOGO_FILE",
         "filedescription": "$BRAND_NAME Remote Agent",
@@ -315,7 +313,7 @@ if (-not $SkipCloudflare) {
     Write-Info "Installing cloudflared..."
     Start-Process msiexec.exe -Wait -ArgumentList "/i `"$cfMsiPath`" /qn"
     Remove-Item $cfMsiPath -Force -ErrorAction SilentlyContinue
-    Refresh-Path
+    Update-EnvPath
     foreach ($cfDir in @("C:\Program Files (x86)\cloudflare\cloudflared",
                          "C:\Program Files\cloudflare\cloudflared")) {
         if ((Test-Path $cfDir) -and ($env:Path -notlike "*$cfDir*")) {
