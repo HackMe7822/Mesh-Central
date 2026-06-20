@@ -306,28 +306,24 @@ Write-OK "Firewall rules added (TCP 443 + 80)"
 # --------------------------------------------------------------
 if (-not $SkipCloudflare) {
 
-    Write-Step 9 "Installing cloudflared"
-    $cfCmd = Get-Command cloudflared -ErrorAction SilentlyContinue
-    if (-not $cfCmd) {
-        Write-Info "Downloading cloudflared MSI..."
-        $cfMsiUrl  = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.msi"
-        $cfMsiPath = "$env:TEMP\cloudflared.msi"
-        Invoke-WebRequest -Uri $cfMsiUrl -OutFile $cfMsiPath -UseBasicParsing
-        Write-Info "Installing cloudflared (silent)..."
-        Start-Process msiexec.exe -Wait -ArgumentList "/i `"$cfMsiPath`" /qn"
-        Remove-Item $cfMsiPath -Force -ErrorAction SilentlyContinue
-
-        Refresh-Path
-        foreach ($cfDir in @("C:\Program Files (x86)\cloudflare\cloudflared",
-                             "C:\Program Files\cloudflare\cloudflared")) {
-            if ((Test-Path $cfDir) -and ($env:Path -notlike "*$cfDir*")) {
-                $env:Path = "$cfDir;" + $env:Path
-            }
+    Write-Step 9 "Installing cloudflared (always latest - no version warnings)"
+    Write-Info "Downloading latest cloudflared MSI..."
+    $cfMsiUrl  = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.msi"
+    $cfMsiPath = "$env:TEMP\cloudflared.msi"
+    Invoke-WebRequest -Uri $cfMsiUrl -OutFile $cfMsiPath -UseBasicParsing
+    Write-Info "Installing cloudflared..."
+    Start-Process msiexec.exe -Wait -ArgumentList "/i `"$cfMsiPath`" /qn"
+    Remove-Item $cfMsiPath -Force -ErrorAction SilentlyContinue
+    Refresh-Path
+    foreach ($cfDir in @("C:\Program Files (x86)\cloudflare\cloudflared",
+                         "C:\Program Files\cloudflare\cloudflared")) {
+        if ((Test-Path $cfDir) -and ($env:Path -notlike "*$cfDir*")) {
+            $env:Path = "$cfDir;" + $env:Path
         }
     }
     $cfCmd = Get-Command cloudflared -ErrorAction SilentlyContinue
-    if (-not $cfCmd) { Write-Fail "cloudflared not found after install. Reboot and re-run with -SkipNodeInstall -SkipCloudflare, then set up tunnel manually." }
-    Write-OK "cloudflared ready  ($( (cloudflared --version 2>&1 | Select-Object -First 1) ))"
+    if (-not $cfCmd) { Write-Fail "cloudflared not found after install." }
+    Write-OK "cloudflared installed"
 
     Write-Step 10 "Cloudflare authentication"
     # Check multiple possible cert locations - $env:USERPROFILE can differ in iex context
@@ -361,11 +357,13 @@ if (-not $SkipCloudflare) {
     Write-Step 11 "Cloudflare Tunnel ($TUNNEL_NAME)"
     New-Item -ItemType Directory -Force -Path $CF_CONFIG_DIR | Out-Null
 
-    # Use cmd /c to prevent PowerShell seeing cloudflared's stderr version warnings
+    # Delete existing tunnel with same name if it exists (cleanup connections first)
     cmd /c "cloudflared tunnel info $TUNNEL_NAME >nul 2>&1"
     if ($LASTEXITCODE -eq 0) {
-        Write-Info "Deleting old tunnel '$TUNNEL_NAME'..."
-        cmd /c "cloudflared tunnel delete $TUNNEL_NAME --force >nul 2>&1"
+        Write-Info "Old tunnel found - cleaning up and deleting..."
+        cmd /c "cloudflared tunnel cleanup $TUNNEL_NAME >nul 2>&1"
+        Start-Sleep 2
+        cmd /c "cloudflared tunnel delete $TUNNEL_NAME >nul 2>&1"
         Start-Sleep 2
     }
 
@@ -386,7 +384,7 @@ if (-not $SkipCloudflare) {
     Write-OK "DNS: $DOMAIN -> $TUNNEL_NAME"
 
     Write-Step 13 "Cloudflare tunnel config + service"
-    $credFile = ($env:USERPROFILE + "\.cloudflared\" + $tunnelId + ".json") -replace '\\', '\\'
+    $credFile = "C:\Users\Administrator\.cloudflared\$tunnelId.json"
     $cfYml = @"
 tunnel: $tunnelId
 credentials-file: $credFile
