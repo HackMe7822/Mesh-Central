@@ -415,30 +415,40 @@ ingress:
     $cfYml | Out-File -FilePath "$CF_CONFIG_DIR\config.yml" -Encoding utf8
     Write-OK "Config: $CF_CONFIG_DIR\config.yml (add more apps here)"
 
-    # Uninstall any existing cloudflared service before reinstalling
+    # Remove any existing cloudflared service (use sc delete - more reliable than cloudflared's own uninstall)
     $existingCf = Get-Service cloudflared -ErrorAction SilentlyContinue
     if ($existingCf) {
+        Write-Info "Removing existing cloudflared service..."
         cmd /c "sc stop cloudflared >nul 2>&1"
-        Start-Sleep 2
-        cmd /c "cloudflared service uninstall >nul 2>&1"
-        Start-Sleep 2
+        Start-Sleep 3
+        cmd /c "sc delete cloudflared >nul 2>&1"
+        Start-Sleep 3
     }
 
-    $svcOut = (cmd /c "cloudflared --config `"$CF_CONFIG_DIR\config.yml`" service install 2>&1") -join " "
-    if ($LASTEXITCODE -ne 0) { Write-Fail "cloudflared service install failed: $svcOut" }
+    # Find cloudflared.exe path
+    $cfExe = (Get-Command cloudflared -ErrorAction SilentlyContinue).Source
+    if (-not $cfExe) {
+        foreach ($d in @("C:\Program Files (x86)\cloudflare\cloudflared",
+                         "C:\Program Files\cloudflare\cloudflared")) {
+            if (Test-Path "$d\cloudflared.exe") { $cfExe = "$d\cloudflared.exe"; break }
+        }
+    }
+    if (-not $cfExe) { Write-Fail "cloudflared.exe not found - cannot create service." }
 
-    cmd /c "sc start cloudflared >nul 2>&1"
+    # Create service directly with sc.exe using the exact command that works manually
+    $binPath = "`"$cfExe`" --config `"$CF_CONFIG_DIR\config.yml`" tunnel run"
+    cmd /c "sc.exe create cloudflared binPath= `"$binPath`" start= auto obj= LocalSystem DisplayName= `"Cloudflare Tunnel`" >nul 2>&1"
+    cmd /c "sc.exe description cloudflared `"Cloudflare Tunnel - Creations IT`" >nul 2>&1"
+    if ($LASTEXITCODE -ne 0) { Write-Fail "cloudflared service creation failed." }
+
+    cmd /c "sc.exe start cloudflared >nul 2>&1"
     Start-Sleep 8
 
     $cfSvc = Get-Service cloudflared -ErrorAction SilentlyContinue
     if ($cfSvc -and $cfSvc.Status -eq "Running") {
         Write-OK "Cloudflare tunnel service RUNNING - https://$Domain is live"
     } else {
-        Write-Info "Service not running. Fix manually:"
-        Write-Info "  sc stop cloudflared"
-        Write-Info "  cloudflared service uninstall"
-        Write-Info "  cloudflared --config `"$CF_CONFIG_DIR\config.yml`" service install"
-        Write-Info "  sc start cloudflared"
+        Write-Fail "cloudflared service did not start. Run manually to see error:`n      cloudflared --config `"$CF_CONFIG_DIR\config.yml`" tunnel run"
     }
 
 } else {
