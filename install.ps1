@@ -142,7 +142,7 @@ if ($UpdateOnly) {
   }
 }
 "@
-    $configJson | Out-File -FilePath "$DATA_DIR\config.json" -Encoding utf8
+    [System.IO.File]::WriteAllText("$DATA_DIR\config.json", $configJson, [System.Text.UTF8Encoding]::new($false))
     Write-OK "config.json updated"
 
     Write-Step 4 "Restarting MeshCentral service"
@@ -303,7 +303,7 @@ $configJson = @"
   }
 }
 "@
-$configJson | Out-File -FilePath "$DATA_DIR\config.json" -Encoding utf8
+[System.IO.File]::WriteAllText("$DATA_DIR\config.json", $configJson, [System.Text.UTF8Encoding]::new($false))
 Write-OK "config.json written to $DATA_DIR\config.json"
 
 # --------------------------------------------------------------
@@ -442,7 +442,7 @@ ingress:
   # -------------------------------------
   - service: http_status:404
 "@
-    $cfYml | Out-File -FilePath "$CF_CONFIG_DIR\config.yml" -Encoding utf8
+    [System.IO.File]::WriteAllText("$CF_CONFIG_DIR\config.yml", $cfYml, [System.Text.UTF8Encoding]::new($false))
     Write-OK "Config: $CF_CONFIG_DIR\config.yml (add more apps here)"
 
     # Remove any existing cloudflared service
@@ -482,6 +482,43 @@ ingress:
         Write-OK "Cloudflare tunnel service RUNNING - https://$Domain is live"
     } else {
         Write-Fail "cloudflared service did not start. Run manually to see error:`n      cloudflared --config `"$CF_CONFIG_DIR\config.yml`" tunnel run"
+    }
+
+    # ------------------------------------------------------------------
+    #  STEP 13 : Fetch Cloudflare TLS cert hash and bake into config.json
+    #  Cloudflare terminates TLS at the edge; agents see Cloudflare's cert.
+    #  MeshCentral must accept that cert hash or agents will be rejected.
+    # ------------------------------------------------------------------
+    Write-Step 13 "Fetching Cloudflare cert hash for agent validation"
+    Write-Info "Waiting for tunnel to register with Cloudflare (up to 30s)..."
+    $cfCertHash = $null
+    for ($attempt = 1; $attempt -le 6; $attempt++) {
+        Start-Sleep 5
+        try {
+            $tcpClient = New-Object System.Net.Sockets.TcpClient($Domain, 443)
+            $sslStream  = New-Object System.Net.Security.SslStream($tcpClient.GetStream(), $false, { $true })
+            $sslStream.AuthenticateAsClient($Domain)
+            $certDer    = $sslStream.RemoteCertificate.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
+            $sha384     = [System.Security.Cryptography.SHA384]::Create()
+            $cfCertHash = [BitConverter]::ToString($sha384.ComputeHash($certDer)).Replace("-","").ToLower()
+            try { $sslStream.Close(); $tcpClient.Close() } catch {}
+            break
+        } catch { Write-Info "  attempt $attempt/6 - tunnel not ready yet..." }
+    }
+
+    if ($cfCertHash) {
+        Write-OK "Cert hash: $cfCertHash"
+        Write-Info "Updating config.json and restarting MeshCentral..."
+        Set-Location $INSTALL_DIR
+        node -e "var fs=require('fs');var c=JSON.parse(fs.readFileSync('meshcentral-data/config.json','utf8'));c.domains[''].certhash='$cfCertHash';fs.writeFileSync('meshcentral-data/config.json',JSON.stringify(c,null,2));console.log('ok');"
+        Restart-Service MeshCentral -Force -ErrorAction SilentlyContinue
+        Start-Sleep 8
+        $svc2 = Get-Service MeshCentral -ErrorAction SilentlyContinue
+        if ($svc2 -and $svc2.Status -eq "Running") { Write-OK "MeshCentral restarted - agents will connect through the tunnel" }
+        else { Write-Info "MeshCentral restart slow - check: sc query MeshCentral" }
+    } else {
+        Write-Info "Could not reach $Domain after 30s - cert hash not set."
+        Write-Info "Once the tunnel is stable, re-run: .\install.ps1 -UpdateOnly"
     }
 
 } else {
