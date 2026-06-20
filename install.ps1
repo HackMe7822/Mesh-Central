@@ -137,6 +137,11 @@ if ($UpdateOnly) {
 # ──────────────────────────────────────────────────────────────
 Write-Step 1 "Node.js LTS"
 
+function Refresh-Path {
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" +
+                [System.Environment]::GetEnvironmentVariable("Path","User")
+}
+
 $nodeOk = $false
 try {
     $nodeVer = (node --version 2>$null)
@@ -148,11 +153,36 @@ if ($nodeOk) {
 } elseif ($SkipNodeInstall) {
     Write-Fail "Node.js 18+ not found and -SkipNodeInstall was set."
 } else {
-    Write-Info "Installing Node.js LTS via winget..."
-    winget install OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements --silent
-    if ($LASTEXITCODE -ne 0) { Write-Fail "winget Node.js install failed." }
-    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+    $wingetCmd = Get-Command winget -ErrorAction SilentlyContinue
+    if ($wingetCmd) {
+        Write-Info "Installing Node.js LTS via winget..."
+        winget install OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements --silent
+    } else {
+        Write-Info "winget not available — downloading Node.js LTS MSI directly..."
+        try {
+            $indexJson = (Invoke-WebRequest -Uri "https://nodejs.org/dist/index.json" -UseBasicParsing).Content | ConvertFrom-Json
+            $lts = $indexJson | Where-Object { $_.lts -ne $false } | Select-Object -First 1
+            $nodeMsiVer = $lts.version
+        } catch {
+            $nodeMsiVer = "v20.19.2"   # pinned fallback
+        }
+        $nodeMsiUrl = "https://nodejs.org/dist/$nodeMsiVer/node-$nodeMsiVer-x64.msi"
+        $nodeMsiPath = "$env:TEMP\node-lts.msi"
+        Write-Info "Downloading $nodeMsiUrl ..."
+        Invoke-WebRequest -Uri $nodeMsiUrl -OutFile $nodeMsiPath -UseBasicParsing
+        Start-Process msiexec.exe -Wait -ArgumentList "/i `"$nodeMsiPath`" /qn ADDLOCAL=ALL"
+        Remove-Item $nodeMsiPath -Force -ErrorAction SilentlyContinue
+    }
+
+    Refresh-Path
+    # MSI adds to machine PATH but current session may lag — add known path explicitly
+    $nodeDir = "C:\Program Files\nodejs"
+    if ((Test-Path $nodeDir) -and ($env:Path -notlike "*$nodeDir*")) {
+        $env:Path = "$nodeDir;" + $env:Path
+    }
+
     $nodeVer = (node --version 2>$null)
+    if (-not $nodeVer) { Write-Fail "Node.js install failed — 'node' still not found after install." }
     Write-OK "Node.js $nodeVer installed"
 }
 
@@ -286,11 +316,29 @@ if (-not $SkipCloudflare) {
     Write-Step 9 "Installing cloudflared"
     $cfCmd = Get-Command cloudflared -ErrorAction SilentlyContinue
     if (-not $cfCmd) {
-        Write-Info "Installing cloudflared via winget..."
-        winget install Cloudflare.cloudflared --accept-source-agreements --accept-package-agreements --silent
-        if ($LASTEXITCODE -ne 0) { Write-Fail "winget cloudflared install failed." }
-        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+        $wingetCmd = Get-Command winget -ErrorAction SilentlyContinue
+        if ($wingetCmd) {
+            Write-Info "Installing cloudflared via winget..."
+            winget install Cloudflare.cloudflared --accept-source-agreements --accept-package-agreements --silent
+        } else {
+            Write-Info "winget not available — downloading cloudflared MSI directly..."
+            $cfMsiUrl  = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.msi"
+            $cfMsiPath = "$env:TEMP\cloudflared.msi"
+            Invoke-WebRequest -Uri $cfMsiUrl -OutFile $cfMsiPath -UseBasicParsing
+            Start-Process msiexec.exe -Wait -ArgumentList "/i `"$cfMsiPath`" /qn"
+            Remove-Item $cfMsiPath -Force -ErrorAction SilentlyContinue
+        }
+        Refresh-Path
+        # MSI may install to Program Files (x86) — add known path if needed
+        foreach ($cfDir in @("C:\Program Files (x86)\cloudflare\cloudflared",
+                             "C:\Program Files\cloudflare\cloudflared")) {
+            if ((Test-Path $cfDir) -and ($env:Path -notlike "*$cfDir*")) {
+                $env:Path = "$cfDir;" + $env:Path
+            }
+        }
     }
+    $cfCmd = Get-Command cloudflared -ErrorAction SilentlyContinue
+    if (-not $cfCmd) { Write-Fail "cloudflared still not found after install. Reboot and re-run with -SkipNodeInstall." }
     Write-OK "cloudflared ready  ($( (cloudflared --version 2>&1 | Select-Object -First 1) ))"
 
     Write-Step 10 "Cloudflare authentication"
