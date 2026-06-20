@@ -415,14 +415,17 @@ ingress:
     $cfYml | Out-File -FilePath "$CF_CONFIG_DIR\config.yml" -Encoding utf8
     Write-OK "Config: $CF_CONFIG_DIR\config.yml (add more apps here)"
 
-    # Remove any existing cloudflared service (use sc delete - more reliable than cloudflared's own uninstall)
+    # Remove any existing cloudflared service
     $existingCf = Get-Service cloudflared -ErrorAction SilentlyContinue
     if ($existingCf) {
         Write-Info "Removing existing cloudflared service..."
         cmd /c "sc stop cloudflared >nul 2>&1"
         Start-Sleep 3
+        # Kill the process to release all handles so Windows can complete the delete
+        cmd /c "taskkill /f /im cloudflared.exe >nul 2>&1"
+        Start-Sleep 2
         cmd /c "sc delete cloudflared >nul 2>&1"
-        Start-Sleep 3
+        Start-Sleep 5
     }
 
     # Find cloudflared.exe path
