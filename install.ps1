@@ -114,7 +114,7 @@ if ($UpdateOnly) {
     "cert": "$Domain",
     "SQLite3": true,
     "port": 443,
-    "redirPort": 80
+    "tlsOffload": "127.0.0.1"
   },
   "domains": {
     "": {
@@ -275,7 +275,7 @@ $configJson = @"
     "cert": "$Domain",
     "SQLite3": true,
     "port": 443,
-    "redirPort": 80
+    "tlsOffload": "127.0.0.1"
   },
   "domains": {
     "": {
@@ -433,9 +433,7 @@ credentials-file: $credFile
 
 ingress:
   - hostname: $Domain
-    service: https://127.0.0.1:443
-    originRequest:
-      noTLSVerify: true
+    service: http://127.0.0.1:443
   # --- Add more apps below this line ---
   # - hostname: crm.creationsit.com
   #   service: http://localhost:3000
