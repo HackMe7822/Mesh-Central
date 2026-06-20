@@ -90,7 +90,24 @@ if ($UpdateOnly) {
         Write-OK "Downloaded $LOGO_FILE"
     }
 
-    Write-Step 2 "Refreshing config.json"
+    Write-Step 2 "Converting logo to PNG"
+    try {
+        Add-Type -AssemblyName PresentationCore
+        $decoder = New-Object System.Windows.Media.Imaging.IconBitmapDecoder(
+            (New-Object System.Uri("$DATA_DIR\$LOGO_FILE")),
+            [System.Windows.Media.Imaging.BitmapCreateOptions]::PreservePixelFormat,
+            [System.Windows.Media.Imaging.BitmapCacheOption]::OnLoad
+        )
+        $frame   = $decoder.Frames | Sort-Object { $_.PixelWidth } -Descending | Select-Object -First 1
+        $encoder = New-Object System.Windows.Media.Imaging.PngBitmapEncoder
+        $encoder.Frames.Add([System.Windows.Media.Imaging.BitmapFrame]::Create($frame))
+        $stream  = New-Object System.IO.FileStream("$DATA_DIR\CreationsIT.png", [System.IO.FileMode]::Create)
+        $encoder.Save($stream)
+        $stream.Close()
+        Write-OK "CreationsIT.png updated"
+    } catch { Write-Info "PNG conversion skipped: $_" }
+
+    Write-Step 3 "Refreshing config.json"
     $configJson = @"
 {
   "settings": {
@@ -128,7 +145,7 @@ if ($UpdateOnly) {
     $configJson | Out-File -FilePath "$DATA_DIR\config.json" -Encoding utf8
     Write-OK "config.json updated"
 
-    Write-Step 3 "Restarting MeshCentral service"
+    Write-Step 4 "Restarting MeshCentral service"
     Restart-Service MeshCentral -Force -ErrorAction SilentlyContinue
     Start-Sleep 5
     $s = Get-Service MeshCentral -ErrorAction SilentlyContinue
