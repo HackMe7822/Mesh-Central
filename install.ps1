@@ -4,22 +4,30 @@
     Creations IT - MeshCentral One-Click Deployer
 .DESCRIPTION
     Installs Node.js, MeshCentral (branded as "Creations IT"), configures it as a
-    Windows service, sets up Windows Firewall, and wires up a fresh Cloudflare Tunnel
-    to mesh.creationsit.com.
+    Windows service, sets up Windows Firewall, and wires up a fresh Cloudflare Tunnel.
+
+    Default subdomain: remote.creationsit.com
+    Override with -Domain for any other subdomain on creationsit.com.
 
     Run as Administrator in PowerShell on the target VM:
-        iwr -useb https://raw.githubusercontent.com/HackMe7822/Mesh-Central/main/install.ps1 | iex
+        iwr "https://raw.githubusercontent.com/HackMe7822/Mesh-Central/main/install.ps1" -OutFile "C:\deploy.ps1"
+        powershell -ExecutionPolicy Bypass -File "C:\deploy.ps1"
+
+    With a custom subdomain:
+        powershell -ExecutionPolicy Bypass -File "C:\deploy.ps1" -Domain "crm.creationsit.com" -TunnelName "crm"
 
     Re-run flags:
-        -SkipCloudflare     Skip Cloudflare tunnel setup (already configured)
-        -SkipNodeInstall    Skip Node.js install (already installed)
-        -UpdateOnly         Only refresh config.json + branding, restart service - no reinstall
-        -InstallDir         Override install path (default: C:\MeshCentral)
-                            Example for existing installs:
-                            .\install.ps1 -UpdateOnly -InstallDir "C:\Program Files\Open Source\MeshCentral"
+        -Domain             Subdomain to publish on (default: remote.creationsit.com)
+        -TunnelName         Cloudflare tunnel name   (default: remote)
+        -SkipCloudflare     Skip Cloudflare tunnel setup
+        -SkipNodeInstall    Skip Node.js install
+        -UpdateOnly         Only refresh config + branding, restart service
+        -InstallDir         Override install path    (default: C:\MeshCentral)
 #>
 
 param(
+    [string]$Domain     = "remote.creationsit.com",
+    [string]$TunnelName = "creationsit-vm",
     [string]$AdminUser  = "",
     [string]$AdminEmail = "",
     [string]$InstallDir = "",
@@ -37,8 +45,6 @@ $INSTALL_DIR   = if ($InstallDir) { $InstallDir } else { "C:\MeshCentral" }
 $DATA_DIR      = "$INSTALL_DIR\meshcentral-data"
 $PUBLIC_DIR    = "$DATA_DIR\public"
 $CF_CONFIG_DIR = "C:\cloudflared"
-$TUNNEL_NAME   = "meshcentral"
-$DOMAIN        = "mesh.creationsit.com"
 $BRAND_NAME    = "Creations IT"
 $BRAND_TITLE2  = "Remote Support"
 $LOGO_FILE     = "CreationsIT.ico"
@@ -385,18 +391,30 @@ if (-not $SkipCloudflare) {
 
     Write-Step 13 "Cloudflare tunnel config + service"
     $credFile = "C:\Users\Administrator\.cloudflared\$tunnelId.json"
+    # One tunnel handles ALL subdomains on this VM.
+    # To add a new app later:
+    #   1. Add an ingress rule below  (hostname + service)
+    #   2. Run: cloudflared tunnel route dns $TunnelName newapp.creationsit.com
+    #   3. Restart-Service cloudflared
     $cfYml = @"
 tunnel: $tunnelId
 credentials-file: $credFile
 
 ingress:
-  - hostname: $DOMAIN
+  - hostname: $Domain
     service: https://localhost:443
     originRequest:
       noTLSVerify: true
+  # --- Add more apps below this line ---
+  # - hostname: crm.creationsit.com
+  #   service: http://localhost:3000
+  # - hostname: files.creationsit.com
+  #   service: http://localhost:8080
+  # -------------------------------------
   - service: http_status:404
 "@
     $cfYml | Out-File -FilePath "$CF_CONFIG_DIR\config.yml" -Encoding utf8
+    Write-OK "Config: $CF_CONFIG_DIR\config.yml (add more apps here)"
 
     $svcOut = (cmd /c "cloudflared --config `"$CF_CONFIG_DIR\config.yml`" service install 2>&1") -join " "
     if ($LASTEXITCODE -ne 0) { Write-Fail "cloudflared service install failed: $svcOut" }
