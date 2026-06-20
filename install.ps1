@@ -416,7 +416,7 @@ if (-not $SkipCloudflare) {
     Write-OK "Tunnel created: $TunnelName  ($tunnelId)"
 
     Write-Step 11 "DNS record ($DOMAIN)"
-    $dnsOut = (cmd /c "cloudflared tunnel route dns $TunnelName $DOMAIN 2>&1") -join " "
+    $dnsOut = (cmd /c "cloudflared tunnel route dns --overwrite-dns $TunnelName $DOMAIN 2>&1") -join " "
     if ($LASTEXITCODE -ne 0) { Write-Fail "DNS record creation failed: $dnsOut" }
     Write-OK "DNS: $DOMAIN -> $TunnelName"
 
