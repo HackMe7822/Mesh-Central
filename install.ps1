@@ -43,7 +43,6 @@ $DATA_DIR      = "$INSTALL_DIR\meshcentral-data"
 $PUBLIC_DIR    = "$DATA_DIR\public"
 $CF_CONFIG_DIR = "C:\cloudflared"
 $BRAND_NAME    = "Creations IT"
-$BRAND_TITLE2  = "Remote Support"
 $LOGO_FILE     = "CreationsIT.ico"
 $LOGO_RAW_URL  = "https://raw.githubusercontent.com/HackMe7822/Mesh-Central/main/CreationsIT.ico"
 # --------------------------------------------------------------
@@ -96,7 +95,7 @@ if ($UpdateOnly) {
 {
   "settings": {
     "cert": "$Domain",
-    "minify": true,
+    "SQLite3": true,
     "port": 443,
     "redirPort": 80,
     "agentCustomization": {
@@ -109,10 +108,19 @@ if ($UpdateOnly) {
   },
   "domains": {
     "": {
-      "title": "$BRAND_NAME",
-      "title2": "$BRAND_TITLE2",
-      "footer": "$BRAND_NAME - Remote Support",
-      "newAccounts": false
+      "title": "$BRAND_NAME Remote Support",
+      "title2": "$BRAND_NAME",
+      "newAccounts": false,
+      "agentFileInfo": {
+        "icon": "$LOGO_FILE",
+        "filedescription": "$BRAND_NAME Remote Agent",
+        "fileversion": "1.0.0",
+        "internalname": "CreationsITAgent",
+        "legalcopyright": "Copyright 2024 $BRAND_NAME",
+        "originalfilename": "CreationsITAgent.exe",
+        "productname": "$BRAND_NAME Remote Support",
+        "productversion": "1.0.0"
+      }
     }
   }
 }
@@ -222,9 +230,6 @@ if (Test-Path $logoSrc) {
 
 # --------------------------------------------------------------
 #  STEP 5 : config.json
-#
-#  IMPORTANT: agentCustomization MUST live in "settings" (not "domains")
-#  for MeshCentral to patch the agent binary with the custom icon + title.
 # --------------------------------------------------------------
 Write-Step 5 "Writing config.json"
 
@@ -232,7 +237,7 @@ $configJson = @"
 {
   "settings": {
     "cert": "$Domain",
-    "minify": true,
+    "SQLite3": true,
     "port": 443,
     "redirPort": 80,
     "agentCustomization": {
@@ -245,10 +250,19 @@ $configJson = @"
   },
   "domains": {
     "": {
-      "title": "$BRAND_NAME",
-      "title2": "$BRAND_TITLE2",
-      "footer": "$BRAND_NAME - Remote Support",
-      "newAccounts": false
+      "title": "$BRAND_NAME Remote Support",
+      "title2": "$BRAND_NAME",
+      "newAccounts": false,
+      "agentFileInfo": {
+        "icon": "$LOGO_FILE",
+        "filedescription": "$BRAND_NAME Remote Agent",
+        "fileversion": "1.0.0",
+        "internalname": "CreationsITAgent",
+        "legalcopyright": "Copyright 2024 $BRAND_NAME",
+        "originalfilename": "CreationsITAgent.exe",
+        "productname": "$BRAND_NAME Remote Support",
+        "productversion": "1.0.0"
+      }
     }
   }
 }
