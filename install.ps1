@@ -330,28 +330,47 @@ if (-not $SkipCloudflare) {
     Write-OK "cloudflared ready  ($( (cloudflared --version 2>&1 | Select-Object -First 1) ))"
 
     Write-Step 10 "Cloudflare authentication"
-    $certPem = "$env:USERPROFILE\.cloudflared\cert.pem"
-    if (Test-Path $certPem) {
-        Write-OK "Already authenticated (cert.pem exists — skipping login)"
+    # Check multiple possible cert locations — $env:USERPROFILE can differ in iex context
+    $certPem = $null
+    foreach ($p in @(
+        "$env:USERPROFILE\.cloudflared\cert.pem",
+        "C:\Users\$env:USERNAME\.cloudflared\cert.pem",
+        "C:\Users\Administrator\.cloudflared\cert.pem"
+    )) {
+        if (Test-Path $p -ErrorAction SilentlyContinue) { $certPem = $p; break }
+    }
+
+    if ($certPem) {
+        Write-OK "Already authenticated (found $certPem)"
     } else {
         Write-Info "A browser window will open. Log in and select creationsit.com"
         Read-Host "      Press ENTER to open the browser"
         cloudflared tunnel login 2>&1 | ForEach-Object { Write-Host "      $_" }
-        if (-not (Test-Path $certPem)) { Write-Fail "Cloudflare login failed — cert.pem not created." }
+        # Re-check after login
+        foreach ($p in @(
+            "$env:USERPROFILE\.cloudflared\cert.pem",
+            "C:\Users\$env:USERNAME\.cloudflared\cert.pem",
+            "C:\Users\Administrator\.cloudflared\cert.pem"
+        )) {
+            if (Test-Path $p -ErrorAction SilentlyContinue) { $certPem = $p; break }
+        }
+        if (-not $certPem) { Write-Fail "Cloudflare login failed — cert.pem not found." }
         Write-OK "Authenticated"
     }
 
     Write-Step 11 "Cloudflare Tunnel ($TUNNEL_NAME)"
     New-Item -ItemType Directory -Force -Path $CF_CONFIG_DIR | Out-Null
 
-    $null = cloudflared tunnel info $TUNNEL_NAME 2>&1
+    # Use cmd /c to prevent PowerShell seeing cloudflared's stderr version warnings
+    cmd /c "cloudflared tunnel info $TUNNEL_NAME >nul 2>&1"
     if ($LASTEXITCODE -eq 0) {
         Write-Info "Deleting old tunnel '$TUNNEL_NAME'..."
-        $null = cloudflared tunnel delete $TUNNEL_NAME --force 2>&1
+        cmd /c "cloudflared tunnel delete $TUNNEL_NAME --force >nul 2>&1"
         Start-Sleep 2
     }
 
-    $createOut = (cloudflared tunnel create $TUNNEL_NAME 2>&1) -join " "
+    $createOut = (cmd /c "cloudflared tunnel create $TUNNEL_NAME 2>&1")
+    $createOut = ($createOut -join " ")
     if ($LASTEXITCODE -ne 0) { Write-Fail "tunnel create failed: $createOut" }
 
     $tunnelId = ""
@@ -362,7 +381,7 @@ if (-not $SkipCloudflare) {
     Write-OK "Tunnel created: $TUNNEL_NAME  ($tunnelId)"
 
     Write-Step 12 "DNS record ($DOMAIN)"
-    $dnsOut = (cloudflared tunnel route dns $TUNNEL_NAME $DOMAIN 2>&1) -join " "
+    $dnsOut = (cmd /c "cloudflared tunnel route dns $TUNNEL_NAME $DOMAIN 2>&1") -join " "
     if ($LASTEXITCODE -ne 0) { Write-Fail "DNS record creation failed: $dnsOut" }
     Write-OK "DNS: $DOMAIN -> $TUNNEL_NAME"
 
@@ -381,7 +400,7 @@ ingress:
 "@
     $cfYml | Out-File -FilePath "$CF_CONFIG_DIR\config.yml" -Encoding utf8
 
-    $svcOut = (cloudflared --config "$CF_CONFIG_DIR\config.yml" service install 2>&1) -join " "
+    $svcOut = (cmd /c "cloudflared --config `"$CF_CONFIG_DIR\config.yml`" service install 2>&1") -join " "
     if ($LASTEXITCODE -ne 0) { Write-Fail "cloudflared service install failed: $svcOut" }
     Start-Service cloudflared -ErrorAction SilentlyContinue
     Start-Sleep 3
