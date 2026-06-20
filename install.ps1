@@ -415,14 +415,31 @@ ingress:
     $cfYml | Out-File -FilePath "$CF_CONFIG_DIR\config.yml" -Encoding utf8
     Write-OK "Config: $CF_CONFIG_DIR\config.yml (add more apps here)"
 
+    # Uninstall any existing cloudflared service before reinstalling
+    $existingCf = Get-Service cloudflared -ErrorAction SilentlyContinue
+    if ($existingCf) {
+        cmd /c "sc stop cloudflared >nul 2>&1"
+        Start-Sleep 2
+        cmd /c "cloudflared service uninstall >nul 2>&1"
+        Start-Sleep 2
+    }
+
     $svcOut = (cmd /c "cloudflared --config `"$CF_CONFIG_DIR\config.yml`" service install 2>&1") -join " "
     if ($LASTEXITCODE -ne 0) { Write-Fail "cloudflared service install failed: $svcOut" }
-    Start-Service cloudflared -ErrorAction SilentlyContinue
-    Start-Sleep 3
+
+    cmd /c "sc start cloudflared >nul 2>&1"
+    Start-Sleep 8
 
     $cfSvc = Get-Service cloudflared -ErrorAction SilentlyContinue
-    if ($cfSvc -and $cfSvc.Status -eq "Running") { Write-OK "Cloudflare tunnel service RUNNING" }
-    else { Write-Info "Check: sc query cloudflared" }
+    if ($cfSvc -and $cfSvc.Status -eq "Running") {
+        Write-OK "Cloudflare tunnel service RUNNING - https://$Domain is live"
+    } else {
+        Write-Info "Service not running. Fix manually:"
+        Write-Info "  sc stop cloudflared"
+        Write-Info "  cloudflared service uninstall"
+        Write-Info "  cloudflared --config `"$CF_CONFIG_DIR\config.yml`" service install"
+        Write-Info "  sc start cloudflared"
+    }
 
 } else {
     Write-Info "Skipping Cloudflare setup (-SkipCloudflare)"
