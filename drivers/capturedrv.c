@@ -314,6 +314,31 @@ NTSTATUS CaptureDispatchDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
         break;
     }
 
+    case IOCTL_CAPTURE_CLEAR_WDA_HWND:
+    {
+        // User mode found the HWND and passes it here.
+        // We just call NtUserSetWindowDisplayAffinity from kernel mode,
+        // bypassing the cross-process ownership check.
+        if (stack->Parameters.DeviceIoControl.InputBufferLength < sizeof(CLEAR_WDA_HWND)) {
+            status = STATUS_BUFFER_TOO_SMALL; break;
+        }
+        PCLEAR_WDA_HWND req = (PCLEAR_WDA_HWND)Irp->AssociatedIrp.SystemBuffer;
+        PVOID hwnd = (PVOID)(ULONG_PTR)req->hwnd64;
+
+        if (!g_NtUserResolved) g_NtUserResolved = EnsureNtUserResolved();
+        if (!g_NtUserResolved || !pfnNtUserSetWDA) {
+            status = STATUS_NOT_FOUND; break;
+        }
+        __try {
+            pfnNtUserSetWDA(hwnd, WDA_NONE);
+            status = STATUS_SUCCESS;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            status = STATUS_ACCESS_VIOLATION;
+        }
+        DbgPrint("capturedrv: CLEAR_WDA_HWND hwnd=%p status=%08X\n", hwnd, status);
+        break;
+    }
+
     default:
         status = STATUS_INVALID_DEVICE_REQUEST; break;
     }

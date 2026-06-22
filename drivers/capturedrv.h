@@ -15,7 +15,10 @@
 #define IOCTL_CAPTURE_SET_RESOLUTION \
     CTL_CODE(FILE_DEVICE_UNKNOWN, 0x802, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
-// IOCTL 0x803 reserved for future use
+// IOCTL 0x803: clear WDA on a single HWND passed from user mode
+// Input: CLEAR_WDA_HWND struct.  Output: none.
+#define IOCTL_CAPTURE_CLEAR_WDA_HWND \
+    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x803, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 // Shared between kernel and user mode
 #pragma pack(push, 1)
@@ -33,6 +36,12 @@ typedef struct _CAPTURE_RESOLUTION {
     ULONG Height;
 } CAPTURE_RESOLUTION, *PCAPTURE_RESOLUTION;
 
+// Input for IOCTL_CAPTURE_CLEAR_WDA_HWND
+// hwnd64 holds the HWND value as a 64-bit integer so the struct is
+// the same size from both 32-bit and 64-bit user-mode callers.
+typedef struct _CLEAR_WDA_HWND {
+    ULONG64 hwnd64;
+} CLEAR_WDA_HWND, *PCLEAR_WDA_HWND;
 
 #pragma pack(pop)
 
