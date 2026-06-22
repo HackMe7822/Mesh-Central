@@ -1,0 +1,46 @@
+; capturedrv.inf
+; Installation file for CaptureDriver kernel driver
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {4D36E97D-E325-11CE-BFC1-08002BE10318}
+Provider    = %ManufacturerName%
+CatalogFile = capturedrv.cat
+DriverVer   = 06/22/2026,1.0.0.0
+PnpLockDown = 1
+
+[DestinationDirs]
+DefaultDestDir = 12    ; %windir%\System32\drivers
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+capturedrv.sys = 1,,
+
+[DefaultInstall.NT$ARCH$]
+CopyFiles = CopyDriverFiles
+
+[DefaultInstall.NT$ARCH$.Services]
+AddService = capturedrv,0x00000002,CaptureDriver_Service
+
+[DefaultUninstall.NT$ARCH$]
+DelFiles   = CopyDriverFiles
+DelService = capturedrv
+
+[CopyDriverFiles]
+capturedrv.sys
+
+[CaptureDriver_Service]
+DisplayName    = %ServiceName%
+ServiceType    = 1                ; SERVICE_KERNEL_DRIVER
+StartType      = 3                ; SERVICE_DEMAND_START (manual, started by our agent)
+ErrorControl   = 1                ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %12%\capturedrv.sys
+LoadOrderGroup = Extended Base
+
+[Strings]
+ManufacturerName = "Creations IT"
+DiskName         = "CaptureDriver Disk"
+ServiceName      = "Creations IT Screen Capture Driver"
