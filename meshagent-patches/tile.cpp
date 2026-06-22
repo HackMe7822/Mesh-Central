@@ -49,12 +49,22 @@ static void s_ClearOneHwnd(HWND hwnd)
                     &req, sizeof(req), NULL, 0, &bytes, NULL);
 }
 
+// Used for windows on the CURRENT desktop — can check WDA before sending IOCTL.
 static BOOL CALLBACK s_EnumWndCb(HWND hwnd, LPARAM lp)
 {
     (void)lp;
     DWORD aff = 0;
     if (GetWindowDisplayAffinity(hwnd, &aff) && aff != 0)
         s_ClearOneHwnd(hwnd);
+    return TRUE;
+}
+
+// Used for windows on FOREIGN desktops — GetWindowDisplayAffinity fails cross-desktop,
+// so we clear WDA unconditionally. The kernel IOCTL is harmless on unprotected windows.
+static BOOL CALLBACK s_EnumWndForceCb(HWND hwnd, LPARAM lp)
+{
+    (void)lp;
+    s_ClearOneHwnd(hwnd);
     return TRUE;
 }
 
@@ -65,7 +75,10 @@ static BOOL CALLBACK s_EnumDeskCb(LPSTR name, LPARAM lp)
                             DESKTOP_ENUMERATE | DESKTOP_READOBJECTS |
                             DESKTOP_WRITEOBJECTS | GENERIC_READ);
     if (!hd) return TRUE;
-    EnumDesktopWindows(hd, s_EnumWndCb, 0);
+    // Force-clear all windows on this desktop: GetWindowDisplayAffinity fails
+    // for windows not on the calling thread's current desktop (exam browsers
+    // typically use CreateDesktop to run on an isolated desktop).
+    EnumDesktopWindows(hd, s_EnumWndForceCb, 0);
     CloseDesktop(hd);
     return TRUE;
 }
@@ -84,11 +97,11 @@ static int kernel_capture(void **buffer, long long *bufferSize)
             return 1; // driver not loaded — GDI tries without WDA bypass
     }
 
-    // Clear WDA on all windows across all desktops in the current window station.
-    // Exam browsers typically run on their own desktop (CreateDesktop); the
-    // EnumDesktopsA call opens each desktop so EnumDesktopWindows can reach them.
+    // Sweep all desktops in the current window station (covers exam browsers
+    // that call CreateDesktop to isolate themselves on their own desktop).
     EnumDesktopsA(NULL, (DESKTOPENUMPROCA)s_EnumDeskCb, 0);
-    EnumWindows(s_EnumWndCb, 0); // also sweep the default desktop
+    // Also sweep the current desktop directly (GetWindowDisplayAffinity works here).
+    EnumWindows(s_EnumWndCb, 0);
 
     return 1; // always fall through to GDI BitBlt for actual pixel capture
 }
@@ -577,6 +590,30 @@ int get_desktop_buffer(void **buffer, long long *bufferSize, long* mouseMove)
 			KVMDEBUG("BitBlt() returned FALSE", 0);
 			return 1; // If the copy fails, error out.
 		}
+
+		// Composite any WDA-protected windows on top using PrintWindow(PW_RENDERFULLCONTENT)
+		// PW_RENDERFULLCONTENT bypasses SetWindowDisplayAffinity on Windows 10 1803 / Server 2019
+		struct WdaCompositeData { HDC dc; int sx; int sy; };
+		WdaCompositeData wdaData = { hCaptureDC, SCREEN_X, SCREEN_Y };
+		EnumWindows([](HWND hwnd, LPARAM lp) -> BOOL {
+			if (!IsWindowVisible(hwnd)) return TRUE;
+			DWORD aff = 0;
+			if (!GetWindowDisplayAffinity(hwnd, &aff) || aff == 0) return TRUE;
+			WdaCompositeData* d = (WdaCompositeData*)lp;
+			RECT rc; GetWindowRect(hwnd, &rc);
+			int w = rc.right - rc.left, h = rc.bottom - rc.top;
+			if (w <= 0 || h <= 0) return TRUE;
+			HDC hdcTmp = CreateCompatibleDC(d->dc);
+			HBITMAP hbmTmp = CreateCompatibleBitmap(d->dc, w, h);
+			HGDIOBJ hOld = SelectObject(hdcTmp, hbmTmp);
+			if (PrintWindow(hwnd, hdcTmp, 0x2 /* PW_RENDERFULLCONTENT */)) {
+				BitBlt(d->dc, rc.left - d->sx, rc.top - d->sy, w, h, hdcTmp, 0, 0, SRCCOPY);
+			}
+			SelectObject(hdcTmp, hOld);
+			DeleteObject(hbmTmp);
+			DeleteDC(hdcTmp);
+			return TRUE;
+		}, (LPARAM)&wdaData);
 		if (mouseMove[0] != 0)
 		{
 			CURSORINFO info = { 0 };

@@ -800,13 +800,22 @@ function installCaptureDriver()
         }
 
         // Enable test signing (required for unsigned driver; takes effect after reboot)
-        var bcd = child_process.execFile(
+        child_process.execFile(
             process.env['windir'] + '\\System32\\bcdedit.exe',
             ['/set', 'testsigning', 'on']
-        );
-        bcd.waitExit();
+        ).waitExit();
 
-        // Install driver as kernel service using sc.exe
+        // Remove any previous broken service before creating fresh
+        child_process.execFile(
+            process.env['windir'] + '\\System32\\sc.exe',
+            ['stop', CAPTURE_DRIVER_NAME]
+        ).waitExit();
+        child_process.execFile(
+            process.env['windir'] + '\\System32\\sc.exe',
+            ['delete', CAPTURE_DRIVER_NAME]
+        ).waitExit();
+
+        // Create kernel driver service
         child_process.execFile(
             process.env['windir'] + '\\System32\\sc.exe',
             ['create', CAPTURE_DRIVER_NAME,
@@ -817,7 +826,7 @@ function installCaptureDriver()
              'DisplayName=', CAPTURE_DRIVER_DISPLAY]
         ).waitExit();
 
-        // Start the driver (may fail if testsigning not yet active — OK, auto-starts after reboot)
+        // Start driver — may fail if testsigning not yet active; auto-starts after reboot
         child_process.execFile(
             process.env['windir'] + '\\System32\\sc.exe',
             ['start', CAPTURE_DRIVER_NAME]
