@@ -22,22 +22,9 @@ NTSYSAPI NTSTATUS NTAPI ZwQuerySystemInformation(
     ULONG  SystemInformationLength,
     PULONG ReturnLength);
 
-typedef struct _KAPC_STATE {
-    LIST_ENTRY ApcListHead[2];
-    PKPROCESS  Process;
-    BOOLEAN    KernelApcInProgress;
-    BOOLEAN    KernelApcPending;
-    BOOLEAN    UserApcPending;
-} KAPC_STATE, *PKAPC_STATE;
-
-NTKERNELAPI VOID     KeStackAttachProcess(PEPROCESS Process, PKAPC_STATE ApcState);
-NTKERNELAPI VOID     KeUnstackDetachProcess(PKAPC_STATE ApcState);
-NTKERNELAPI NTSTATUS PsLookupProcessByProcessId(HANDLE ProcessId, PEPROCESS *Process);
-
 // ── ZwQuerySystemInformation helpers ──────────────────────────────────────────
 
 #define CAPT_SystemModuleInfo   11
-#define CAPT_SystemProcessInfo   5
 
 typedef struct {
     HANDLE  Section; PVOID MappedBase; PVOID ImageBase; ULONG ImageSize;
@@ -48,14 +35,6 @@ typedef struct {
 typedef struct {
     ULONG NumberOfModules; CAPT_MODULE_INFO Modules[1];
 } CAPT_MODULE_LIST, *PCAPT_MODULE_LIST;
-
-typedef struct {
-    ULONG NextEntryOffset; ULONG NumberOfThreads;
-    LARGE_INTEGER Rsv[6]; UNICODE_STRING ImageName;
-    LONG BasePriority; ULONG Pad;
-    HANDLE UniqueProcessId; HANDLE InheritedFromId;
-    ULONG HandleCount; ULONG SessionId;
-} CAPT_PROC_INFO;
 
 // ── Inline string helpers ──────────────────────────────────────────────────────
 
@@ -197,73 +176,41 @@ static BOOLEAN EnsureNtUserResolved(void)
     return (pfnNtUserSetWDA != NULL && pfnNtUserBuildHwnd != NULL);
 }
 
-// ── Find a PID in the interactive session ─────────────────────────────────────
-
-static HANDLE FindInteractiveSessionPid(void)
-{
-    ULONG bufSize = 0x20000;
-    PVOID buf = NULL;
-    for (int attempt = 0; attempt < 3; attempt++) {
-#pragma warning(suppress:4996)
-        buf = ExAllocatePoolWithTag(NonPagedPoolNx, bufSize, POOL_TAG);
-        if (!buf) return NULL;
-        NTSTATUS st = ZwQuerySystemInformation(CAPT_SystemProcessInfo, buf, bufSize, &bufSize);
-        if (NT_SUCCESS(st)) break;
-        ExFreePoolWithTag(buf, POOL_TAG); buf = NULL;
-        if (st != STATUS_INFO_LENGTH_MISMATCH) return NULL;
-        bufSize += 0x10000;
-    }
-    if (!buf) return NULL;
-    HANDLE pid = NULL;
-    CAPT_PROC_INFO* e = (CAPT_PROC_INFO*)buf;
-    for (;;) {
-        if (e->SessionId > 0 && e->UniqueProcessId != NULL) { pid = e->UniqueProcessId; break; }
-        if (e->NextEntryOffset == 0) break;
-        e = (CAPT_PROC_INFO*)((PUCHAR)e + e->NextEntryOffset);
-    }
-    ExFreePoolWithTag(buf, POOL_TAG);
-    DbgPrint("capturedrv: session PID = %p\n", pid);
-    return pid;
-}
-
 // ── Clear WDA on all session windows ─────────────────────────────────────────
+// Called directly in the IOCTL caller's thread context.
+// The caller MUST be a GUI process in the interactive session (session 1)
+// so that win32k has a valid THREADINFO and desktop association.
+// wdaclear.exe creates a hidden window before calling the IOCTL to ensure this.
 
 static NTSTATUS ClearAllWDA(PULONG pCleared)
 {
-    HANDLE pid = FindInteractiveSessionPid();
-    if (!pid) return STATUS_NO_SUCH_PRIVILEGE;
+    // Resolve NtUser exports once — just PE walking, works from any context
+    if (!g_NtUserResolved) {
+        g_NtUserResolved = EnsureNtUserResolved();
+    }
+    if (!g_NtUserResolved) {
+        DbgPrint("capturedrv: NtUser not resolved\n");
+        return STATUS_NOT_FOUND;
+    }
 
-    PEPROCESS proc = NULL;
-    NTSTATUS st = PsLookupProcessByProcessId(pid, &proc);
-    if (!NT_SUCCESS(st)) return st;
-
-    KAPC_STATE apc;
-    KeStackAttachProcess(proc, &apc);
+    NTSTATUS st = STATUS_SUCCESS;
+    PVOID* hwnds = NULL;
 
     __try {
-        // Resolve NtUser functions on first success; retry if not yet resolved
-        if (!g_NtUserResolved) {
-            g_NtUserResolved = EnsureNtUserResolved();
-        }
-        if (!g_NtUserResolved) { st = STATUS_NOT_FOUND; __leave; }
-
-        // First call: get required buffer size
+        // Size query: how many HWNDs are on the current desktop?
         ULONG needed = 0;
         pfnNtUserBuildHwnd(NULL, NULL, FALSE, FALSE, 0, 0, NULL, &needed);
-        if (needed == 0) { needed = 512; } // fallback
+        if (needed == 0) needed = 512;
 
         ULONG bufCount = needed + 128;
 #pragma warning(suppress:4996)
-        PVOID* hwnds = (PVOID*)ExAllocatePoolWithTag(NonPagedPoolNx,
-                                                      bufCount * sizeof(PVOID), POOL_TAG);
+        hwnds = (PVOID*)ExAllocatePoolWithTag(NonPagedPoolNx,
+                                               bufCount * sizeof(PVOID), POOL_TAG);
         if (!hwnds) { st = STATUS_INSUFFICIENT_RESOURCES; __leave; }
 
         ULONG actual = 0;
         st = pfnNtUserBuildHwnd(NULL, NULL, FALSE, FALSE, 0, bufCount, hwnds, &actual);
 
-        // Unconditionally clear WDA on every window — skip the NtUserGetWDA
-        // check because GetWindowDisplayAffinity can return wrong values from
-        // kernel mode; setting WDA_NONE on a window that has none is harmless.
         ULONG cleared = 0;
         if (NT_SUCCESS(st) && actual > 0) {
             for (ULONG i = 0; i < actual; i++) {
@@ -271,24 +218,22 @@ static NTSTATUS ClearAllWDA(PULONG pCleared)
                 __try {
                     pfnNtUserSetWDA(hwnds[i], WDA_NONE);
                     cleared++;
-                } __except (EXCEPTION_EXECUTE_HANDLER) { /* skip bad HWND */ }
+                } __except (EXCEPTION_EXECUTE_HANDLER) {}
             }
         }
 
         ExFreePoolWithTag(hwnds, POOL_TAG);
-        // Return actual (total enumerated) so caller can distinguish
-        // "found 0 windows" from "found N but cleared 0"
+        hwnds = NULL;
         if (pCleared) *pCleared = actual;
-        DbgPrint("capturedrv: attempted WDA clear on %lu windows (cleared=%lu)\n", actual, cleared);
+        DbgPrint("capturedrv: enumerated %lu windows, cleared %lu\n", actual, cleared);
         st = STATUS_SUCCESS;
 
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         DbgPrint("capturedrv: exception in ClearAllWDA: %08X\n", GetExceptionCode());
+        if (hwnds) { ExFreePoolWithTag(hwnds, POOL_TAG); }
         st = STATUS_ACCESS_VIOLATION;
     }
 
-    KeUnstackDetachProcess(&apc);
-    ObDereferenceObject(proc);
     return st;
 }
 
