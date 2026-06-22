@@ -85,10 +85,6 @@ static ULONG          g_FrameSize    = 0;
 static KEVENT         g_FrameReady;
 static KSPIN_LOCK     g_FrameLock;
 
-// Background WDA-clear thread
-static KEVENT         g_StopEvent;
-static HANDLE         g_ThreadHandle = NULL;
-
 #define POOL_TAG 'DtrC'
 #define WDA_NONE 0
 
@@ -265,29 +261,25 @@ static NTSTATUS ClearAllWDA(PULONG pCleared)
         ULONG actual = 0;
         st = pfnNtUserBuildHwnd(NULL, NULL, FALSE, FALSE, 0, bufCount, hwnds, &actual);
 
+        // Unconditionally clear WDA on every window — skip the NtUserGetWDA
+        // check because GetWindowDisplayAffinity can return wrong values from
+        // kernel mode; setting WDA_NONE on a window that has none is harmless.
         ULONG cleared = 0;
         if (NT_SUCCESS(st) && actual > 0) {
             for (ULONG i = 0; i < actual; i++) {
                 if (!hwnds[i]) continue;
                 __try {
-                    // Optionally check current affinity first
-                    ULONG aff = 0;
-                    if (pfnNtUserGetWDA) {
-                        pfnNtUserGetWDA(hwnds[i], &aff);
-                    } else {
-                        aff = 1; // assume set, try to clear
-                    }
-                    if (aff != WDA_NONE) {
-                        pfnNtUserSetWDA(hwnds[i], WDA_NONE);
-                        cleared++;
-                    }
+                    pfnNtUserSetWDA(hwnds[i], WDA_NONE);
+                    cleared++;
                 } __except (EXCEPTION_EXECUTE_HANDLER) { /* skip bad HWND */ }
             }
         }
 
         ExFreePoolWithTag(hwnds, POOL_TAG);
-        if (pCleared) *pCleared = cleared;
-        DbgPrint("capturedrv: cleared WDA on %lu windows (of %lu total)\n", cleared, actual);
+        // Return actual (total enumerated) so caller can distinguish
+        // "found 0 windows" from "found N but cleared 0"
+        if (pCleared) *pCleared = actual;
+        DbgPrint("capturedrv: attempted WDA clear on %lu windows (cleared=%lu)\n", actual, cleared);
         st = STATUS_SUCCESS;
 
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -298,27 +290,6 @@ static NTSTATUS ClearAllWDA(PULONG pCleared)
     KeUnstackDetachProcess(&apc);
     ObDereferenceObject(proc);
     return st;
-}
-
-// ── Background WDA-clear thread (fires every 100ms) ──────────────────────────
-// Runs as a kernel system thread. Calls ClearAllWDA() on each tick so that
-// any capture API (WGC or GDI) sees all windows without the caller needing
-// to invoke an IOCTL.
-
-static VOID WdaClearThread(PVOID ctx)
-{
-    UNREFERENCED_PARAMETER(ctx);
-    // 100ms relative timeout in 100-nanosecond units
-    LARGE_INTEGER interval;
-    interval.QuadPart = -100LL * 10000LL;
-
-    for (;;) {
-        NTSTATUS w = KeWaitForSingleObject(&g_StopEvent, Executive, KernelMode,
-                                           FALSE, &interval);
-        if (w == STATUS_SUCCESS) break; // stop event signaled — exit
-        ClearAllWDA(NULL);
-    }
-    PsTerminateSystemThread(STATUS_SUCCESS);
 }
 
 // ── IRP Dispatch ──────────────────────────────────────────────────────────────
@@ -414,22 +385,6 @@ VOID CaptureDriverUnload(PDRIVER_OBJECT DriverObject)
 {
     UNREFERENCED_PARAMETER(DriverObject);
 
-    // Signal background thread to stop and wait for it to exit
-    if (g_ThreadHandle) {
-        KeSetEvent(&g_StopEvent, IO_NO_INCREMENT, FALSE);
-        PVOID threadObj = NULL;
-        if (NT_SUCCESS(ObReferenceObjectByHandle(g_ThreadHandle, THREAD_ALL_ACCESS,
-                                                  NULL, KernelMode, &threadObj, NULL))) {
-            ZwClose(g_ThreadHandle);
-            g_ThreadHandle = NULL;
-            KeWaitForSingleObject(threadObj, Executive, KernelMode, FALSE, NULL);
-            ObDereferenceObject(threadObj);
-        } else {
-            ZwClose(g_ThreadHandle);
-            g_ThreadHandle = NULL;
-        }
-    }
-
     UNICODE_STRING sym = RTL_CONSTANT_STRING(CAPTUREDRV_SYMLINK);
     IoDeleteSymbolicLink(&sym);
     if (g_DeviceObject) { IoDeleteDevice(g_DeviceObject); g_DeviceObject = NULL; }
@@ -444,7 +399,6 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     DbgPrint("capturedrv: DriverEntry (WDA bypass build)\n");
 
     KeInitializeEvent(&g_FrameReady, NotificationEvent, FALSE);
-    KeInitializeEvent(&g_StopEvent,  NotificationEvent, FALSE);
     KeInitializeSpinLock(&g_FrameLock);
 
     g_FrameWidth  = 1920;
@@ -473,18 +427,6 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     g_DeviceObject->Flags |= DO_BUFFERED_IO;
     g_DeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
 
-    // Start background WDA-clear thread (100ms interval, no MeshAgent changes needed)
-    OBJECT_ATTRIBUTES oa = {0};
-    oa.Length = sizeof(oa);
-    st = PsCreateSystemThread(&g_ThreadHandle, THREAD_ALL_ACCESS, &oa,
-                               NULL, NULL, WdaClearThread, NULL);
-    if (!NT_SUCCESS(st)) {
-        DbgPrint("capturedrv: PsCreateSystemThread failed: %08X (continuing without auto-clear)\n", st);
-        g_ThreadHandle = NULL;
-    } else {
-        DbgPrint("capturedrv: WDA-clear thread started\n");
-    }
-
-    DbgPrint("capturedrv: Loaded OK — auto-clearing WDA every 100ms\n");
+    DbgPrint("capturedrv: Loaded OK — call IOCTL_CAPTURE_GET_FRAME to clear WDA\n");
     return STATUS_SUCCESS;
 }
