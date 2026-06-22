@@ -23,56 +23,74 @@ limitations under the License.
 #include <windows.h>
 using namespace Gdiplus;
 
-// ─── Creations IT: Kernel capture driver integration ─────────────────────────
-// Captures screen bypassing SetWindowDisplayAffinity (used by safe browsers)
-// Falls back to standard GDI if driver is not loaded
+// ─── Creations IT: Kernel WDA bypass ─────────────────────────────────────────
+// Before every GDI capture: enumerate all desktops, find windows that have
+// WDA_EXCLUDEFROMCAPTURE set, and clear them via capturedrv.sys.
+// The driver calls NtUserSetWindowDisplayAffinity from kernel mode, bypassing
+// the cross-process ownership restriction that blocks user-mode code.
+// Always returns 1 — actual pixels come from the standard GDI BitBlt below.
 
-#define CAPTUREDRV_NAME     "\\\\.\\CaptureDriver"
-#define IOCTL_CAPTURE_INFO  CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_BUFFERED,    FILE_ANY_ACCESS)
-#define IOCTL_CAPTURE_FRAME CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_OUT_DIRECT,  FILE_ANY_ACCESS)
+#define CAPTUREDRV_NAME "\\\\.\\CaptureDriver"
+#ifndef CTL_CODE
+#define CTL_CODE(d,f,m,a) (((d)<<16)|((a)<<14)|((f)<<2)|(m))
+#endif
+#define IOCTL_CAPTURE_CLEAR_WDA_HWND CTL_CODE(0x22, 0x803, 0, 0)
 
-typedef struct { UINT32 Width, Height, Stride, FrameSize, Format; } CDRV_INFO;
+typedef struct { ULONG64 hwnd64; } CDRV_CLEAR_WDA;
 
-static HANDLE s_drv      = INVALID_HANDLE_VALUE;
-static PVOID  s_drvBuf   = NULL;
-static ULONG  s_drvBufSz = 0;
+static HANDLE s_drv = INVALID_HANDLE_VALUE;
+
+static void s_ClearOneHwnd(HWND hwnd)
+{
+    CDRV_CLEAR_WDA req;
+    req.hwnd64 = (ULONG64)(ULONG_PTR)hwnd;
+    DWORD bytes = 0;
+    DeviceIoControl(s_drv, IOCTL_CAPTURE_CLEAR_WDA_HWND,
+                    &req, sizeof(req), NULL, 0, &bytes, NULL);
+}
+
+static BOOL CALLBACK s_EnumWndCb(HWND hwnd, LPARAM lp)
+{
+    (void)lp;
+    DWORD aff = 0;
+    if (GetWindowDisplayAffinity(hwnd, &aff) && aff != 0)
+        s_ClearOneHwnd(hwnd);
+    return TRUE;
+}
+
+static BOOL CALLBACK s_EnumDeskCb(LPSTR name, LPARAM lp)
+{
+    (void)lp;
+    HDESK hd = OpenDesktopA(name, 0, FALSE,
+                            DESKTOP_ENUMERATE | DESKTOP_READOBJECTS |
+                            DESKTOP_WRITEOBJECTS | GENERIC_READ);
+    if (!hd) return TRUE;
+    EnumDesktopWindows(hd, s_EnumWndCb, 0);
+    CloseDesktop(hd);
+    return TRUE;
+}
 
 static int kernel_capture(void **buffer, long long *bufferSize)
 {
-    // Open driver handle (once)
+    (void)buffer; (void)bufferSize;
+
     if (s_drv == INVALID_HANDLE_VALUE)
     {
         s_drv = CreateFileA(CAPTUREDRV_NAME,
             GENERIC_READ | GENERIC_WRITE,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-        if (s_drv == INVALID_HANDLE_VALUE) return 1;
-
-        CDRV_INFO info = {0};
-        DWORD got = 0;
-        if (!DeviceIoControl(s_drv, IOCTL_CAPTURE_INFO, NULL, 0, &info, sizeof(info), &got, NULL))
-        { CloseHandle(s_drv); s_drv = INVALID_HANDLE_VALUE; return 1; }
-
-        s_drvBufSz = info.FrameSize;
-        s_drvBuf   = VirtualAlloc(NULL, s_drvBufSz, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE);
-        if (!s_drvBuf)
-        { CloseHandle(s_drv); s_drv = INVALID_HANDLE_VALUE; return 1; }
+        if (s_drv == INVALID_HANDLE_VALUE)
+            return 1; // driver not loaded — GDI tries without WDA bypass
     }
 
-    // Fetch frame from kernel driver
-    DWORD got = 0;
-    if (!DeviceIoControl(s_drv, IOCTL_CAPTURE_FRAME, NULL, 0, s_drvBuf, s_drvBufSz, &got, NULL) || got == 0)
-    {
-        CloseHandle(s_drv); s_drv = INVALID_HANDLE_VALUE;
-        VirtualFree(s_drvBuf, 0, MEM_RELEASE); s_drvBuf = NULL;
-        return 1;
-    }
+    // Clear WDA on all windows across all desktops in the current window station.
+    // Exam browsers typically run on their own desktop (CreateDesktop); the
+    // EnumDesktopsA call opens each desktop so EnumDesktopWindows can reach them.
+    EnumDesktopsA(NULL, (DESKTOPENUMPROCA)s_EnumDeskCb, 0);
+    EnumWindows(s_EnumWndCb, 0); // also sweep the default desktop
 
-    *buffer     = malloc(got);
-    if (!*buffer) return 1;
-    memcpy(*buffer, s_drvBuf, got);
-    *bufferSize = got;
-    return 0;
+    return 1; // always fall through to GDI BitBlt for actual pixel capture
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
