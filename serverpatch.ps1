@@ -1,44 +1,59 @@
 #Requires -RunAsAdministrator
 # Run on the MeshCentral SERVER (VM) once.
-# Patches all MeshAgent Windows binaries so "Open Source" registry path
-# is replaced with "Win Runtime" — exam browsers stop detecting the agent,
-# WDA is never set, MeshCentral sees screen without any client-side steps.
+# Patches the MeshAgent binaries that MeshCentral DISTRIBUTES to client machines.
+# These live in node_modules\meshcentral\agents\ — NOT the agent installed on this server.
+# After patch: new agent downloads from your MeshCentral URL have "Win Runtime" registry
+# path instead of "Open Source" — exam browsers don't detect them, never set WDA.
 
-Write-Host "[*] Finding MeshCentral agent binaries..." -ForegroundColor Cyan
+Write-Host "[*] Finding MeshCentral distribution agent binaries..." -ForegroundColor Cyan
+Write-Host "    (Looking in node_modules, NOT the agent installed on this server)" -ForegroundColor Gray
 
-# Find MeshCentral installation root
-$roots = @(
-    "C:\MeshCentral",
-    "C:\Program Files\MeshCentral",
-    "C:\meshcentral"
+# MeshCentral stores agent binaries it serves to clients inside its node_modules
+$agentsDirs = @(
+    "C:\MeshCentral\node_modules\meshcentral\agents",
+    "C:\meshcentral\node_modules\meshcentral\agents",
+    "C:\Program Files\MeshCentral\node_modules\meshcentral\agents"
 )
-$agentDirs = @()
-foreach ($r in $roots) {
-    if (Test-Path $r) {
-        $found = Get-ChildItem -Path $r -Recurse -Filter "MeshAgent-Windows*.exe" -ErrorAction SilentlyContinue
-        if ($found) { $agentDirs += $found }
+
+$allExes = @()
+foreach ($d in $agentsDirs) {
+    if (Test-Path $d) {
+        $found = Get-ChildItem -Path $d -Filter "*.exe" -ErrorAction SilentlyContinue
+        if ($found) { $allExes += $found.FullName }
+        Write-Host "    Found agents dir: $d ($($found.Count) files)" -ForegroundColor Green
     }
 }
 
-# Also search node_modules for any meshagent exe
-$nodeSearch = Get-ChildItem -Path "C:\" -Recurse -Filter "MeshAgent*.exe" -Depth 8 -ErrorAction SilentlyContinue |
-    Where-Object { $_.FullName -notlike "*\meshcentral-data\*" }
-$agentDirs += $nodeSearch
-
-# Deduplicate
-$allExes = ($agentDirs | Select-Object -ExpandProperty FullName | Sort-Object -Unique)
-
+# Fallback: search node_modules anywhere
 if (-not $allExes) {
-    Write-Host "[!] No MeshAgent binaries found. Looking harder..." -ForegroundColor Yellow
-    # Fallback: search anywhere under C:\ up to depth 10
-    $allExes = Get-ChildItem -Path "C:\" -Recurse -Filter "*agent*.exe" -Depth 10 -ErrorAction SilentlyContinue |
-        Where-Object { $_.FullName -match "mesh" -or $_.FullName -match "SysDiag" } |
-        Select-Object -ExpandProperty FullName | Sort-Object -Unique
+    Write-Host "[!] Standard paths not found. Searching node_modules..." -ForegroundColor Yellow
+    $allExes = Get-ChildItem "C:\" -Recurse -Depth 9 -Filter "*.exe" -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match "node_modules.+meshcentral.+agents" } |
+        Select-Object -ExpandProperty FullName
 }
 
 if (-not $allExes) {
-    Write-Host "[!] Still nothing found. Please run:" -ForegroundColor Red
-    Write-Host '    Get-ChildItem C:\ -Recurse -Filter "*.exe" -Depth 8 | Where-Object { $_.Name -match "mesh|agent" }'
+    Write-Host "[!] No distribution agent binaries found in node_modules." -ForegroundColor Yellow
+}
+
+# Also patch any locally installed agent on THIS machine (agent installed on server itself)
+$localAgents = Get-WmiObject Win32_Service -ErrorAction SilentlyContinue |
+    Where-Object { $_.PathName -and ($_.PathName -match "mesh|SysDiag|CreationsIT") } |
+    ForEach-Object {
+        if ($_.PathName -match '^"([^"]+)"') { $Matches[1] }
+        else { ($_.PathName -split ' ')[0] }
+    } | Where-Object { $_ -and (Test-Path $_) } | Sort-Object -Unique
+
+if ($localAgents) {
+    Write-Host "`n[*] Also patching locally installed agent(s) on this server:" -ForegroundColor Cyan
+    $localAgents | ForEach-Object { Write-Host "    $_" }
+    $allExes += $localAgents
+}
+
+$allExes = $allExes | Sort-Object -Unique
+
+if (-not $allExes) {
+    Write-Host "[!] Nothing to patch found anywhere." -ForegroundColor Red
     exit 1
 }
 
@@ -73,11 +88,32 @@ foreach ($path in $allExes) {
     }
 
     if ($count -gt 0) {
+        # Find and stop any service whose executable is this file
+        $owningSvc = Get-WmiObject Win32_Service | Where-Object {
+            $_.PathName -and $_.PathName -match [regex]::Escape([IO.Path]::GetFileName($path))
+        } | Select-Object -First 1
+
+        if ($owningSvc) {
+            Write-Host "    [*] Stopping service '$($owningSvc.Name)'..."
+            Stop-Service $owningSvc.Name -Force -ErrorAction SilentlyContinue
+            Start-Sleep 2
+        }
+
         $bak = "$path.bak"
-        if (-not (Test-Path $bak)) { Copy-Item $path $bak -Force }
-        [IO.File]::WriteAllBytes($path, $bytes)
-        Write-Host "    [+] Patched $count occurrence(s) -> $([IO.Path]::GetFileName($path))" -ForegroundColor Green
-        $patchedFiles++
+        if (-not (Test-Path $bak)) { Copy-Item $path $bak -Force -ErrorAction SilentlyContinue }
+
+        try {
+            [IO.File]::WriteAllBytes($path, $bytes)
+            Write-Host "    [+] Patched $count occurrence(s) -> $([IO.Path]::GetFileName($path))" -ForegroundColor Green
+            $patchedFiles++
+        } catch {
+            Write-Host "    [!] Write failed: $_" -ForegroundColor Red
+            Write-Host "    Try stopping the service manually and re-running." -ForegroundColor Yellow
+        }
+
+        if ($owningSvc) {
+            Start-Service $owningSvc.Name -ErrorAction SilentlyContinue
+        }
     } else {
         Write-Host "    [~] No 'Open Source' found (already patched or different binary)" -ForegroundColor Yellow
     }
