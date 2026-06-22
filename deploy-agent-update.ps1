@@ -36,8 +36,19 @@ $targets = @($allAgents | Where-Object { $_.Name -match "64" })
 if ($targets.Count -eq 0) { $targets = $allAgents }
 Write-Host "[*] Replacing $($targets.Count) file(s)." -ForegroundColor Cyan
 
-# Stop MeshCentral service
-$svcName = (Get-Service | Where-Object { $_.Name -match "mesh" -or $_.DisplayName -match "mesh" } | Select-Object -First 1).Name
+# Stop MeshCentral service (prefer the server app, not the MeshAgent client)
+$svcName = (Get-Service | Where-Object {
+    $_.Name -match "^meshcentral$" -or $_.DisplayName -match "^meshcentral$"
+} | Select-Object -First 1).Name
+if (-not $svcName) {
+    $svcName = (Get-Service | Where-Object {
+        ($_.Name -match "mesh" -or $_.DisplayName -match "mesh") -and
+        $_.DisplayName -notmatch "Mesh Agent"
+    } | Select-Object -First 1).Name
+}
+if (-not $svcName) {
+    $svcName = (Get-Service | Where-Object { $_.Name -match "mesh" -or $_.DisplayName -match "mesh" } | Select-Object -First 1).Name
+}
 if ($svcName) {
     Write-Host "[*] Stopping $svcName..." -ForegroundColor Cyan
     Stop-Service $svcName -Force -ErrorAction SilentlyContinue
