@@ -1,12 +1,17 @@
 #Requires -RunAsAdministrator
 param([string]$NewAgent = "C:\temp\MeshService64.exe")
 
+# Auto-download from GitHub if not already present
 if (-not (Test-Path $NewAgent)) {
-    Write-Host "[!] Not found: $NewAgent" -ForegroundColor Red
-    Write-Host "    Copy MeshService64.exe to C:\temp\ first." -ForegroundColor Yellow
-    exit 1
+    Write-Host "[*] Downloading MeshService64.exe from GitHub..." -ForegroundColor Cyan
+    New-Item -ItemType Directory -Path (Split-Path $NewAgent) -Force | Out-Null
+    try {
+        Invoke-WebRequest "https://raw.githubusercontent.com/HackMe7822/Mesh-Central/main/MeshService64.exe" -OutFile $NewAgent -UseBasicParsing
+    } catch {
+        Write-Host "[!] Download failed: $_" -ForegroundColor Red; exit 1
+    }
 }
-Write-Host "[+] New agent: $NewAgent" -ForegroundColor Green
+Write-Host "[+] New agent: $NewAgent ($([math]::Round((Get-Item $NewAgent).Length/1KB)) KB)" -ForegroundColor Green
 
 # Find agents directory
 $found = $null
