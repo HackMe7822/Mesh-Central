@@ -429,15 +429,28 @@ if (-not $SkipCloudflare) {
         } else {
             Write-Info "Adding $Domain to existing config.yml..."
             $newRule = "  - hostname: $Domain`n    service: http://127.0.0.1:443"
-            $existingYml = $existingYml -replace "(\r?\n[ \t]*- service: http_status:404)", "`n$newRule`n`$1"
-            [System.IO.File]::WriteAllText("$CF_CONFIG_DIR\config.yml", $existingYml, [System.Text.UTF8Encoding]::new($false))
-            Write-OK "Added $Domain to config.yml (all other rules untouched)"
+            $updatedYml = $existingYml -replace "(\r?\n[ \t]*- service: http_status:\d+)", "`n$newRule`n`$1"
+            if ($updatedYml -match "hostname:\s*$([regex]::Escape($Domain))") {
+                [System.IO.File]::WriteAllText("$CF_CONFIG_DIR\config.yml", $updatedYml, [System.Text.UTF8Encoding]::new($false))
+                Write-OK "Added $Domain to config.yml (all other rules untouched)"
+            } else {
+                # Regex did not match catch-all line - append manually before end of file
+                Write-Info "Catch-all line not matched - appending $Domain rule manually..."
+                $appended = $existingYml.TrimEnd() + "`n  - hostname: $Domain`n    service: http://127.0.0.1:443`n  - service: http_status:404`n"
+                [System.IO.File]::WriteAllText("$CF_CONFIG_DIR\config.yml", $appended, [System.Text.UTF8Encoding]::new($false))
+                Write-OK "Added $Domain to config.yml (appended at end)"
+            }
         }
         # Restart service to pick up any config changes
         Write-Info "Restarting cloudflared service..."
-        cmd /c "sc stop cloudflared >nul 2>&1"
-        Start-Sleep 5
-        cmd /c "sc start cloudflared >nul 2>&1"
+        $nssmExe = (Get-Command nssm -ErrorAction SilentlyContinue).Source
+        if ($nssmExe) {
+            & $nssmExe restart cloudflared 2>&1 | Out-Null
+        } else {
+            cmd /c "sc stop cloudflared >nul 2>&1"
+            Start-Sleep 5
+            cmd /c "sc start cloudflared >nul 2>&1"
+        }
         Start-Sleep 8
     } else {
         # New tunnel - write a fresh config and (re)create the Windows service
