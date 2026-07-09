@@ -237,8 +237,8 @@ Set-Location $INSTALL_DIR
 if (Test-Path "$INSTALL_DIR\node_modules\meshcentral") {
     Write-OK "MeshCentral already installed"
 } else {
-    Write-Info "Running npm install meshcentral (1-3 min)..."
-    npm install meshcentral
+    Write-Info "Running npm install from HackMe7822/MeshCentral-Original (1-3 min)..."
+    npm install git+https://github.com/HackMe7822/MeshCentral-Original.git
     if ($LASTEXITCODE -ne 0) { Write-Fail "npm install meshcentral failed." }
     Write-OK "MeshCentral installed"
 }
