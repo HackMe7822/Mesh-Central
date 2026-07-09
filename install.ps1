@@ -110,17 +110,15 @@ if ($UpdateOnly) {
     Write-Step 3 "Refreshing config.json (preserving certhash)"
     $cfgPath = "$DATA_DIR\config.json"
 
+    # Extract certhash via regex on raw JSON — works regardless of PS version or key structure
     $existingCertHash = $null
     if (Test-Path $cfgPath) {
-        try {
-            $existingCfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
-            # PS5: empty-string key needs PSObject.Properties
-            $domainObj = $existingCfg.domains.PSObject.Properties | Where-Object { $_.Name -eq '' } | Select-Object -ExpandProperty Value
-            if (-not $domainObj) { $domainObj = $existingCfg.domains.PSObject.Properties | Select-Object -First 1 -ExpandProperty Value }
-            $existingCertHash = $domainObj.certhash
-        } catch {}
+        $rawJson = Get-Content $cfgPath -Raw
+        if ($rawJson -match '"certhash"\s*:\s*"([a-fA-F0-9]+)"') {
+            $existingCertHash = $Matches[1]
+        }
     }
-    if ($existingCertHash) { Write-Info "Preserving certhash: $existingCertHash" } else { Write-Info "No existing certhash found in config" }
+    if ($existingCertHash) { Write-Info "Preserving certhash: $existingCertHash" } else { Write-Info "No certhash found in existing config" }
 
     $domainBlock = [ordered]@{
         title        = "$BRAND_NAME Remote Support"
