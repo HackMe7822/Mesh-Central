@@ -121,6 +121,8 @@ if ($UpdateOnly) {
       "title": "$BRAND_NAME Remote Support",
       "title2": "$BRAND_NAME",
       "newAccounts": false,
+      "agentInvite": true,
+      "guestMode": true,
       "agentcustomization": {
         "displayname": "$BRAND_NAME Remote Support",
         "description": "$BRAND_NAME Remote Management Agent",
@@ -282,6 +284,8 @@ $configJson = @"
       "title": "$BRAND_NAME Remote Support",
       "title2": "$BRAND_NAME",
       "newAccounts": false,
+      "agentInvite": true,
+      "guestMode": true,
       "agentcustomization": {
         "displayname": "$BRAND_NAME Remote Support",
         "description": "$BRAND_NAME Remote Management Agent",
