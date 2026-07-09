@@ -110,7 +110,6 @@ if ($UpdateOnly) {
     Write-Step 3 "Refreshing config.json (preserving certhash)"
     $cfgPath = "$DATA_DIR\config.json"
 
-    # Read existing certhash before overwriting
     $existingCertHash = $null
     if (Test-Path $cfgPath) {
         try {
@@ -120,47 +119,43 @@ if ($UpdateOnly) {
     }
     if ($existingCertHash) { Write-Info "Preserving certhash: $existingCertHash" }
 
-    $certHashLine = if ($existingCertHash) { "`"certhash`": `"$existingCertHash`"," } else { "" }
-
-    $configJson = @"
-{
-  "settings": {
-    "cert": "$Domain",
-    "SQLite3": true,
-    "port": 443,
-    "tlsOffload": "127.0.0.1"
-  },
-  "domains": {
-    "": {
-      "title": "$BRAND_NAME Remote Support",
-      "title2": "$BRAND_NAME",
-      "newAccounts": false,
-      "agentInvite": true,
-      "guestMode": true,
-      $certHashLine
-      "agentcustomization": {
-        "displayname": "$BRAND_NAME Remote Support",
-        "description": "$BRAND_NAME Remote Management Agent",
-        "companyname": "$BRAND_NAME",
-        "filename": "CreationsIT-Agent",
-        "image": "CreationsIT.png"
-      },
-      "agentFileInfo": {
-        "icon": "$LOGO_FILE",
-        "filedescription": "$BRAND_NAME Remote Agent",
-        "fileversion": "1.0.0",
-        "internalname": "CreationsITAgent",
-        "legalcopyright": "Copyright 2024 $BRAND_NAME",
-        "originalfilename": "CreationsITAgent.exe",
-        "productname": "$BRAND_NAME Remote Support",
-        "productversion": "1.0.0"
-      }
+    $domainBlock = [ordered]@{
+        title        = "$BRAND_NAME Remote Support"
+        title2       = "$BRAND_NAME"
+        newAccounts  = $false
+        agentInvite  = $true
+        guestMode    = $true
+        agentcustomization = [ordered]@{
+            displayname = "$BRAND_NAME Remote Support"
+            description = "$BRAND_NAME Remote Management Agent"
+            companyname = "$BRAND_NAME"
+            filename    = "CreationsIT-Agent"
+            image       = "CreationsIT.png"
+        }
+        agentFileInfo = [ordered]@{
+            icon            = "$LOGO_FILE"
+            filedescription = "$BRAND_NAME Remote Agent"
+            fileversion     = "1.0.0"
+            internalname    = "CreationsITAgent"
+            legalcopyright  = "Copyright 2024 $BRAND_NAME"
+            originalfilename = "CreationsITAgent.exe"
+            productname     = "$BRAND_NAME Remote Support"
+            productversion  = "1.0.0"
+        }
     }
-  }
-}
-"@
-    [System.IO.File]::WriteAllText($cfgPath, $configJson, [System.Text.UTF8Encoding]::new($false))
-    Write-OK "config.json updated (certhash $(if ($existingCertHash) { 'preserved' } else { 'not found in old config' }))"
+    if ($existingCertHash) { $domainBlock['certhash'] = $existingCertHash }
+
+    $cfg = [ordered]@{
+        settings = [ordered]@{
+            cert       = "$Domain"
+            SQLite3    = $true
+            port       = 443
+            tlsOffload = "127.0.0.1"
+        }
+        domains = [ordered]@{ '' = $domainBlock }
+    }
+    $cfg | ConvertTo-Json -Depth 10 | Out-File $cfgPath -Encoding utf8NoBOM -NoNewline
+    Write-OK "config.json updated (certhash $(if ($existingCertHash) { 'preserved' } else { 'not set' }))"
 
     Write-Step 4 "Restarting MeshCentral service"
     Restart-Service MeshCentral -Force -ErrorAction SilentlyContinue
