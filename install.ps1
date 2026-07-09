@@ -114,10 +114,13 @@ if ($UpdateOnly) {
     if (Test-Path $cfgPath) {
         try {
             $existingCfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
-            $existingCertHash = $existingCfg.domains.''.certhash
+            # PS5: empty-string key needs PSObject.Properties
+            $domainObj = $existingCfg.domains.PSObject.Properties | Where-Object { $_.Name -eq '' } | Select-Object -ExpandProperty Value
+            if (-not $domainObj) { $domainObj = $existingCfg.domains.PSObject.Properties | Select-Object -First 1 -ExpandProperty Value }
+            $existingCertHash = $domainObj.certhash
         } catch {}
     }
-    if ($existingCertHash) { Write-Info "Preserving certhash: $existingCertHash" }
+    if ($existingCertHash) { Write-Info "Preserving certhash: $existingCertHash" } else { Write-Info "No existing certhash found in config" }
 
     $domainBlock = [ordered]@{
         title        = "$BRAND_NAME Remote Support"
@@ -154,7 +157,8 @@ if ($UpdateOnly) {
         }
         domains = [ordered]@{ '' = $domainBlock }
     }
-    $cfg | ConvertTo-Json -Depth 10 | Out-File $cfgPath -Encoding utf8NoBOM -NoNewline
+    $json = $cfg | ConvertTo-Json -Depth 10
+    [System.IO.File]::WriteAllText($cfgPath, $json, [System.Text.UTF8Encoding]::new($false))
     Write-OK "config.json updated (certhash $(if ($existingCertHash) { 'preserved' } else { 'not set' }))"
 
     Write-Step 4 "Restarting MeshCentral service"
