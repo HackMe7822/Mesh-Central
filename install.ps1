@@ -30,7 +30,8 @@ param(
     [string]$InstallDir = "",
     [switch]$SkipCloudflare,
     [switch]$SkipNodeInstall,
-    [switch]$UpdateOnly
+    [switch]$UpdateOnly,
+    [switch]$UseOfficialNpm   # Use official 'npm install meshcentral' instead of our fork
 )
 
 $ErrorActionPreference = "Continue"
@@ -237,8 +238,13 @@ Set-Location $INSTALL_DIR
 if (Test-Path "$INSTALL_DIR\node_modules\meshcentral") {
     Write-OK "MeshCentral already installed"
 } else {
-    Write-Info "Running npm install from HackMe7822/MeshCentral-Original (1-3 min)..."
-    npm install git+https://github.com/HackMe7822/MeshCentral-Original.git
+    if ($UseOfficialNpm) {
+        Write-Info "Running npm install meshcentral (official Ylianst repo, 1-3 min)..."
+        npm install meshcentral
+    } else {
+        Write-Info "Running npm install from HackMe7822/MeshCentral-Original (1-3 min)..."
+        npm install git+https://github.com/HackMe7822/MeshCentral-Original.git
+    }
     if ($LASTEXITCODE -ne 0) { Write-Fail "npm install meshcentral failed." }
     Write-OK "MeshCentral installed"
 }
