@@ -1,8 +1,7 @@
-#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
     Safe MeshCentral update with automatic rollback.
-    Creations IT — updates to HackMe7822/MeshCentral-Original fork.
+    Creations IT -- updates to HackMe7822/MeshCentral-Original fork.
 
 .DESCRIPTION
     1. Backs up current node_modules\meshcentral to a zip
@@ -10,8 +9,8 @@
     3. npm-installs new fork version
     4. Copies audiostream plugin to meshcentral-data\plugins\
     5. Enables plugin in config.json
-    6. Restarts MeshCentral service
-    7. Waits up to 5 minutes — if service dies, auto-rollbacks
+    6. Restarts MeshCentral (service or node process)
+    7. Monitors for 5 min -- auto-rollbacks if MeshCentral dies
 
 .PARAMETER InstallDir
     MeshCentral install directory. Default: C:\MeshCentral
@@ -28,19 +27,18 @@ param(
     [switch]$Force
 )
 
-$GREEN  = "`e[32m"; $CYAN = "`e[36m"; $YELLOW = "`e[33m"; $RED = "`e[31m"; $NC = "`e[0m"
-function ok   { Write-Host "${GREEN}[OK]${NC}  $args" }
-function info { Write-Host "${CYAN}[..]${NC}  $args" }
-function warn { Write-Host "${YELLOW}[WW]${NC}  $args" }
-function fail { Write-Host "${RED}[!!]${NC}  $args"; exit 1 }
+function ok   { param($m) Write-Host "[OK]  $m" }
+function info { param($m) Write-Host "[..]  $m" }
+function warn { param($m) Write-Host "[WW]  $m" }
+function abort { param($m) Write-Host "[!!]  $m"; exit 1 }
 
-# ── Validate install dir ───────────────────────────────────────────────────────
+# --- Validate install dir ---
 if (-not (Test-Path "$InstallDir\node_modules\meshcentral")) {
-    fail "MeshCentral not found at $InstallDir\node_modules\meshcentral"
+    abort "MeshCentral not found at $InstallDir\node_modules\meshcentral"
 }
 
 Write-Host ""
-Write-Host "${YELLOW}=== MeshCentral Safe Update — Creations IT ===${NC}"
+Write-Host "=== MeshCentral Safe Update -- Creations IT ==="
 Write-Host "  Install dir : $InstallDir"
 Write-Host "  Fork        : github.com/HackMe7822/MeshCentral-Original"
 Write-Host ""
@@ -50,8 +48,29 @@ if (-not $Force) {
     if ($confirm -ne 'y' -and $confirm -ne 'Y') { Write-Host "Cancelled."; exit 0 }
 }
 
-# ── Step 1: Backup current meshcentral package ────────────────────────────────
-$date    = Get-Date -Format "yyyy-MM-dd_HH-mm"
+# --- Detect how MeshCentral is running ---
+$svc = Get-Service -Name "MeshCentral" -ErrorAction SilentlyContinue
+$useService = ($svc -ne $null)
+$nodePid = $null
+
+if (-not $useService) {
+    # Find the node.exe process running meshcentral
+    $nodeProcs = Get-WmiObject Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue
+    foreach ($p in $nodeProcs) {
+        if ($p.CommandLine -like "*meshcentral*") {
+            $nodePid = $p.ProcessId
+            break
+        }
+    }
+    if ($nodePid) {
+        info "MeshCentral running as node process PID $nodePid (no Windows service)"
+    } else {
+        info "MeshCentral not currently running (will just update files)"
+    }
+}
+
+# --- Step 1: Backup ---
+$date = Get-Date -Format "yyyy-MM-dd_HH-mm"
 $backDir = Join-Path $InstallDir "meshcentral-backups"
 New-Item -ItemType Directory -Force $backDir | Out-Null
 
@@ -59,12 +78,14 @@ $pkgBackup  = Join-Path $backDir "meshcentral-pkg-$date.zip"
 $dataBackup = Join-Path $backDir "meshcentral-data-$date.zip"
 
 info "Backing up MeshCentral package..."
+$backupOk = $false
 try {
     Compress-Archive -Path "$InstallDir\node_modules\meshcentral" `
                      -DestinationPath $pkgBackup -CompressionLevel Fastest
     ok "Package backup: $pkgBackup"
+    $backupOk = $true
 } catch {
-    warn "Package backup failed (continuing anyway): $_"
+    warn "Package backup failed: $_"
 }
 
 info "Backing up meshcentral-data..."
@@ -73,178 +94,211 @@ try {
     if (Test-Path $dataPath) {
         Compress-Archive -Path $dataPath -DestinationPath $dataBackup -CompressionLevel Fastest
         ok "Data backup: $dataBackup"
-    } else {
-        warn "meshcentral-data not found — skipping data backup"
     }
 } catch {
-    warn "Data backup failed (continuing anyway): $_"
+    warn "Data backup failed (non-fatal): $_"
 }
 
-# ── Step 2: Stop service ───────────────────────────────────────────────────────
-$svcName = 'MeshCentral'
-$svcWasRunning = $false
+# --- Step 2: Stop MeshCentral ---
+$wasRunning = $false
 
-$svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
-if ($svc -and $svc.Status -eq 'Running') {
-    $svcWasRunning = $true
+if ($useService -and $svc.Status -eq 'Running') {
+    $wasRunning = $true
     info "Stopping MeshCentral service..."
-    Stop-Service -Name $svcName -Force
+    Stop-Service -Name "MeshCentral" -Force
     Start-Sleep -Seconds 4
     ok "Service stopped"
+} elseif ($nodePid) {
+    $wasRunning = $true
+    info "Stopping MeshCentral node process (PID $nodePid)..."
+    Stop-Process -Id $nodePid -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 3
+    ok "Node process stopped"
 }
 
-# ── Step 3: npm install from fork ─────────────────────────────────────────────
+# --- Step 3: npm install from fork ---
 info "Installing updated fork from GitHub..."
 Set-Location $InstallDir
 
-# Keep package.json intact, just reinstall meshcentral
-try {
-    $npmResult = & npm install "git+https://github.com/HackMe7822/MeshCentral-Original.git" 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        warn "npm install returned exit code $LASTEXITCODE"
-        Write-Host $npmResult
-        # Rollback
-        Write-Host "${RED}npm install FAILED — rolling back...${NC}"
-        if (Test-Path $pkgBackup) {
-            Remove-Item "$InstallDir\node_modules\meshcentral" -Recurse -Force -ErrorAction SilentlyContinue
-            Expand-Archive -Path $pkgBackup -DestinationPath "$InstallDir\node_modules" -Force
-            ok "Rollback complete"
-        }
-        if ($svcWasRunning) { Start-Service -Name $svcName -ErrorAction SilentlyContinue }
-        fail "Update aborted — original version restored"
-    }
-    ok "npm install succeeded"
-} catch {
-    warn "npm install exception: $_"
-    fail "npm install failed — server unchanged (service was stopped; restart manually if needed)"
-}
+$npmOut = & npm install "git+https://github.com/HackMe7822/MeshCentral-Original.git" 2>&1
+$npmExit = $LASTEXITCODE
 
-# ── Step 4: Deploy audiostream plugin ─────────────────────────────────────────
+if ($npmExit -ne 0) {
+    Write-Host $npmOut
+    warn "npm install failed (exit $npmExit) -- rolling back..."
+    if ($backupOk -and (Test-Path $pkgBackup)) {
+        Remove-Item "$InstallDir\node_modules\meshcentral" -Recurse -Force -ErrorAction SilentlyContinue
+        Expand-Archive -Path $pkgBackup -DestinationPath "$InstallDir\node_modules" -Force
+        ok "Rollback complete"
+    }
+    if ($wasRunning) {
+        if ($useService) {
+            Start-Service -Name "MeshCentral" -ErrorAction SilentlyContinue
+        }
+    }
+    abort "Update aborted -- original version restored"
+}
+ok "npm install succeeded"
+
+# --- Step 4: Deploy audiostream plugin ---
 $pluginSrc  = Join-Path $InstallDir "node_modules\meshcentral\plugins\audiostream"
 $pluginDest = Join-Path $InstallDir "meshcentral-data\plugins\audiostream"
 
 if (Test-Path $pluginSrc) {
-    info "Deploying audiostream plugin to meshcentral-data\plugins\..."
+    info "Deploying audiostream plugin..."
     New-Item -ItemType Directory -Force (Split-Path $pluginDest) | Out-Null
     if (Test-Path $pluginDest) { Remove-Item $pluginDest -Recurse -Force }
     Copy-Item -Path $pluginSrc -Destination $pluginDest -Recurse
-    ok "Plugin deployed: $pluginDest"
+    ok "Plugin deployed to: $pluginDest"
 } else {
-    warn "audiostream plugin not found in package — skipping plugin deploy"
+    warn "audiostream plugin not found in package -- skipping"
 }
 
-# ── Step 5: Enable plugin in config.json ──────────────────────────────────────
+# --- Step 5: Enable plugin in config.json ---
 $configPath = Join-Path $InstallDir "meshcentral-data\config.json"
 if (Test-Path $configPath) {
-    info "Updating config.json to enable audiostream plugin..."
+    info "Enabling audiostream plugin in config.json..."
     try {
-        $cfg = Get-Content $configPath -Raw | ConvertFrom-Json
+        $rawJson = Get-Content $configPath -Raw -Encoding UTF8
+        $cfg = $rawJson | ConvertFrom-Json
 
-        # Ensure settings.plugins exists
         if ($null -eq $cfg.settings.plugins) {
-            $cfg.settings | Add-Member -NotePropertyName 'plugins' -NotePropertyValue ([PSCustomObject]@{ enabled = $true; list = @('audiostream') }) -Force
+            $pluginsObj = New-Object PSObject -Property @{ enabled = $true; list = @('audiostream') }
+            $cfg.settings | Add-Member -NotePropertyName 'plugins' -NotePropertyValue $pluginsObj -Force
         } else {
             $cfg.settings.plugins | Add-Member -NotePropertyName 'enabled' -NotePropertyValue $true -Force
             if ($null -eq $cfg.settings.plugins.list) {
                 $cfg.settings.plugins | Add-Member -NotePropertyName 'list' -NotePropertyValue @('audiostream') -Force
             } else {
                 $list = [System.Collections.ArrayList]@($cfg.settings.plugins.list)
-                if ($list -notcontains 'audiostream') { $list.Add('audiostream') | Out-Null }
+                if ($list -notcontains 'audiostream') { [void]$list.Add('audiostream') }
                 $cfg.settings.plugins.list = $list.ToArray()
             }
         }
 
-        $cfg | ConvertTo-Json -Depth 10 | Set-Content $configPath -Encoding UTF8
-        ok "config.json updated — audiostream plugin enabled"
+        $cfg | ConvertTo-Json -Depth 10 | Out-File $configPath -Encoding UTF8
+        ok "config.json updated -- audiostream enabled"
     } catch {
         warn "Could not update config.json: $_"
-        warn "Manual step: add '\"plugins\": { \"enabled\": true, \"list\": [\"audiostream\"] }' to settings in config.json"
+        warn "Manual step: add `"plugins`": { `"enabled`": true, `"list`": [`"audiostream`"] } under settings in config.json"
     }
 } else {
-    warn "config.json not found at $configPath — plugin will not be loaded until you add it manually"
+    warn "config.json not found at $configPath"
 }
 
-# ── Step 6: Start service and monitor ─────────────────────────────────────────
-if ($svcWasRunning) {
-    info "Starting MeshCentral service..."
-    try { Start-Service -Name $svcName } catch { warn "Start-Service error: $_" }
-
-    # Monitor for 5 minutes — auto-rollback if service dies
-    info "Monitoring service for 5 minutes (auto-rollback if it dies)..."
-    $deadline    = (Get-Date).AddMinutes(5)
-    $checkPassed = $false
-
-    while ((Get-Date) -lt $deadline) {
-        Start-Sleep -Seconds 10
-        $svcCheck = Get-Service -Name $svcName -ErrorAction SilentlyContinue
-        if ($svcCheck -and $svcCheck.Status -eq 'Running') {
-            $elapsed = [int]((Get-Date) - (Get-Date).AddMinutes(-5 + (($deadline - (Get-Date)).TotalMinutes))).TotalSeconds
-            Write-Host "  [$(Get-Date -Format HH:mm:ss)] Service running... ($(($deadline - (Get-Date)).ToString('mm\:ss')) left)"
-            $checkPassed = $true
-        } else {
-            Write-Host "${RED}  [$(Get-Date -Format HH:mm:ss)] Service STOPPED!${NC}"
-            Write-Host ""
-            warn "MeshCentral stopped after update — rolling back automatically!"
-
-            # Kill any lingering process
-            Stop-Service -Name $svcName -Force -ErrorAction SilentlyContinue
-
-            # Restore package from backup
-            if (Test-Path $pkgBackup) {
-                info "Restoring from backup: $pkgBackup"
-                Remove-Item "$InstallDir\node_modules\meshcentral" -Recurse -Force -ErrorAction SilentlyContinue
-                Expand-Archive -Path $pkgBackup -DestinationPath "$InstallDir\node_modules" -Force
-                ok "Package restored"
-            }
-
-            # Restore config if we changed it
-            if (Test-Path $configPath) {
-                try {
-                    $cfg = Get-Content $configPath -Raw | ConvertFrom-Json
-                    if ($cfg.settings.plugins -and $cfg.settings.plugins.list) {
-                        $list = [System.Collections.ArrayList]@($cfg.settings.plugins.list)
-                        $list.Remove('audiostream') | Out-Null
-                        $cfg.settings.plugins.list = $list.ToArray()
-                        $cfg | ConvertTo-Json -Depth 10 | Set-Content $configPath -Encoding UTF8
-                    }
-                } catch {}
-            }
-
-            # Restart original service
-            Start-Sleep -Seconds 3
-            try { Start-Service -Name $svcName } catch { warn "Could not restart service: $_" }
-            Start-Sleep -Seconds 5
-
-            $svcFinal = Get-Service -Name $svcName -ErrorAction SilentlyContinue
-            if ($svcFinal -and $svcFinal.Status -eq 'Running') {
-                ok "ROLLBACK COMPLETE — original MeshCentral is running again"
-            } else {
-                fail "ROLLBACK FAILED — start service manually: Start-Service $svcName"
-            }
-            exit 1
-        }
-
-        # After 60 seconds running = confirmed stable
-        if ($checkPassed -and (Get-Date) -gt (Get-Date).AddMinutes(-4).AddSeconds(0)) {
-            break  # Stop monitoring after ~60s stable
-        }
-    }
-
-    # Final check
-    $svcFinal = Get-Service -Name $svcName -ErrorAction SilentlyContinue
-    if ($svcFinal -and $svcFinal.Status -eq 'Running') {
-        Write-Host ""
-        ok "=== UPDATE COMPLETE — MeshCentral is running ==="
-        Write-Host "  Backup saved: $pkgBackup"
-        Write-Host "  To rollback manually:"
-        Write-Host "    Stop-Service MeshCentral"
-        Write-Host "    Remove-Item $InstallDir\node_modules\meshcentral -Recurse -Force"
-        Write-Host "    Expand-Archive '$pkgBackup' -DestinationPath '$InstallDir\node_modules' -Force"
-        Write-Host "    Start-Service MeshCentral"
+# --- Step 6: Start MeshCentral ---
+if ($wasRunning) {
+    if ($useService) {
+        info "Starting MeshCentral service..."
+        try { Start-Service -Name "MeshCentral" } catch { warn "Start-Service error: $_" }
     } else {
-        fail "Service stopped after monitoring period — check logs at $InstallDir\meshcentral-data\trace.log"
+        info "Starting MeshCentral via node..."
+        $nodeExe = (Get-Command node -ErrorAction SilentlyContinue).Source
+        if ($nodeExe) {
+            $startArgs = @{
+                FilePath         = $nodeExe
+                ArgumentList     = "node_modules\meshcentral"
+                WorkingDirectory = $InstallDir
+                WindowStyle      = 'Minimized'
+                PassThru         = $true
+            }
+            $newProc = Start-Process @startArgs
+            $nodePid = $newProc.Id
+            info "Started node PID: $nodePid"
+        } else {
+            warn "node.exe not found in PATH -- start MeshCentral manually: node node_modules\meshcentral"
+        }
     }
 } else {
-    ok "=== UPDATE COMPLETE (service was not running, not started) ==="
-    Write-Host "  Start manually: Start-Service MeshCentral"
+    ok "MeshCentral was not running -- files updated, start it manually when ready"
+    Write-Host ""
+    Write-Host "=== UPDATE COMPLETE (not started) ==="
+    Write-Host "  Backup: $pkgBackup"
+    exit 0
+}
+
+# --- Step 7: Monitor for 5 minutes ---
+info "Monitoring for 5 minutes -- will auto-rollback if MeshCentral crashes..."
+$deadline   = (Get-Date).AddMinutes(5)
+$stableAt   = $null
+$rolledBack = $false
+
+while ((Get-Date) -lt $deadline) {
+    Start-Sleep -Seconds 10
+
+    $running = $false
+    if ($useService) {
+        $chk = Get-Service -Name "MeshCentral" -ErrorAction SilentlyContinue
+        $running = ($chk -and $chk.Status -eq 'Running')
+    } elseif ($nodePid) {
+        $chk = Get-Process -Id $nodePid -ErrorAction SilentlyContinue
+        $running = ($chk -ne $null)
+    } else {
+        $running = $true  # Can't check, assume OK
+    }
+
+    $remaining = [int]($deadline - (Get-Date)).TotalSeconds
+    if ($running) {
+        Write-Host "  [$(Get-Date -Format HH:mm:ss)] Running OK  (${remaining}s left)"
+        if ($null -eq $stableAt) { $stableAt = Get-Date }
+        # 60 seconds stable = done monitoring
+        if (((Get-Date) - $stableAt).TotalSeconds -ge 60) { break }
+    } else {
+        Write-Host "  [$(Get-Date -Format HH:mm:ss)] STOPPED -- rolling back!"
+        $rolledBack = $true
+
+        if ($useService) { Stop-Service "MeshCentral" -Force -ErrorAction SilentlyContinue }
+
+        if ($backupOk -and (Test-Path $pkgBackup)) {
+            info "Restoring package from backup..."
+            Remove-Item "$InstallDir\node_modules\meshcentral" -Recurse -Force -ErrorAction SilentlyContinue
+            Expand-Archive -Path $pkgBackup -DestinationPath "$InstallDir\node_modules" -Force
+            ok "Package restored"
+        }
+
+        # Remove plugin from config
+        try {
+            $cfg = Get-Content $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($cfg.settings.plugins -and $cfg.settings.plugins.list) {
+                $list = [System.Collections.ArrayList]@($cfg.settings.plugins.list)
+                [void]$list.Remove('audiostream')
+                $cfg.settings.plugins.list = $list.ToArray()
+                $cfg | ConvertTo-Json -Depth 10 | Out-File $configPath -Encoding UTF8
+            }
+        } catch {}
+
+        Start-Sleep -Seconds 3
+        if ($useService) {
+            try { Start-Service "MeshCentral" } catch {}
+            Start-Sleep -Seconds 6
+            $final = Get-Service "MeshCentral" -ErrorAction SilentlyContinue
+            if ($final -and $final.Status -eq 'Running') {
+                ok "ROLLBACK COMPLETE -- original MeshCentral is running"
+            } else {
+                warn "ROLLBACK COMPLETE -- service may need manual start: Start-Service MeshCentral"
+            }
+        } else {
+            ok "ROLLBACK COMPLETE -- restart MeshCentral manually: cd $InstallDir && node node_modules\meshcentral"
+        }
+        break
+    }
+}
+
+if (-not $rolledBack) {
+    Write-Host ""
+    ok "=== UPDATE COMPLETE -- MeshCentral is running ==="
+    Write-Host "  Backup at: $pkgBackup"
+    Write-Host ""
+    Write-Host "  Manual rollback if needed:"
+    if ($useService) {
+        Write-Host "    Stop-Service MeshCentral"
+        Write-Host "    Remove-Item $InstallDir\node_modules\meshcentral -Recurse -Force"
+        Write-Host "    Expand-Archive '$pkgBackup' -DestinationPath '$InstallDir\node_modules'"
+        Write-Host "    Start-Service MeshCentral"
+    } else {
+        Write-Host "    Stop the node process"
+        Write-Host "    Remove-Item $InstallDir\node_modules\meshcentral -Recurse -Force"
+        Write-Host "    Expand-Archive '$pkgBackup' -DestinationPath '$InstallDir\node_modules'"
+        Write-Host "    cd $InstallDir && node node_modules\meshcentral"
+    }
 }
