@@ -30,8 +30,7 @@ param(
     [string]$InstallDir = "",
     [switch]$SkipCloudflare,
     [switch]$SkipNodeInstall,
-    [switch]$UpdateOnly,
-    [switch]$UseOfficialNpm   # Use official 'npm install meshcentral' instead of our fork
+    [switch]$UpdateOnly
 )
 
 $ErrorActionPreference = "Continue"
@@ -153,6 +152,7 @@ if ($UpdateOnly) {
             SQLite3    = $true
             port       = 443
             tlsOffload = "127.0.0.1"
+            plugins    = [ordered]@{ enabled = $true; list = @('audiostream') }
         }
         domains = [ordered]@{ '' = $domainBlock }
     }
@@ -238,15 +238,25 @@ Set-Location $INSTALL_DIR
 if (Test-Path "$INSTALL_DIR\node_modules\meshcentral") {
     Write-OK "MeshCentral already installed"
 } else {
-    if ($UseOfficialNpm) {
-        Write-Info "Running npm install meshcentral (official Ylianst repo, 1-3 min)..."
-        npm install meshcentral
-    } else {
-        Write-Info "Running npm install from HackMe7822/MeshCentral-Original (1-3 min)..."
-        npm install git+https://github.com/HackMe7822/MeshCentral-Original.git
-    }
-    if ($LASTEXITCODE -ne 0) { Write-Fail "npm install meshcentral failed." }
-    Write-OK "MeshCentral installed"
+    Write-Info "Running npm install (Creations IT fork, 1-3 min)..."
+    npm install "git+https://github.com/HackMe7822/MeshCentral-Original.git"
+    if ($LASTEXITCODE -ne 0) { Write-Fail "npm install failed." }
+    Write-OK "MeshCentral (Creations IT fork) installed"
+}
+
+# --------------------------------------------------------------
+#  STEP 3a : Deploy audiostream plugin
+# --------------------------------------------------------------
+Write-Step 3 "Deploying audiostream plugin"
+$pluginSrc  = "$INSTALL_DIR\node_modules\meshcentral\plugins\audiostream"
+$pluginDest = "$DATA_DIR\plugins\audiostream"
+if (Test-Path $pluginSrc) {
+    New-Item -ItemType Directory -Force -Path "$DATA_DIR\plugins" | Out-Null
+    if (Test-Path $pluginDest) { Remove-Item $pluginDest -Recurse -Force }
+    Copy-Item -Path $pluginSrc -Destination $pluginDest -Recurse
+    Write-OK "audiostream plugin deployed to $pluginDest"
+} else {
+    Write-Info "audiostream plugin not found in package -- skipped"
 }
 
 # --------------------------------------------------------------
@@ -295,7 +305,11 @@ $configJson = @"
     "cert": "$Domain",
     "SQLite3": true,
     "port": 443,
-    "tlsOffload": "127.0.0.1"
+    "tlsOffload": "127.0.0.1",
+    "plugins": {
+      "enabled": true,
+      "list": ["audiostream"]
+    }
   },
   "domains": {
     "": {
