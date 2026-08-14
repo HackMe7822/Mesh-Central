@@ -175,27 +175,32 @@ $configPath = Join-Path $InstallDir "meshcentral-data\config.json"
 
 if (Test-Path $configPath) {
     # --- Patch existing config ---
+    # NOTE: deliberately text-based, NOT ConvertFrom-Json/ConvertTo-Json.
+    # MeshCentral's config.json uses "" (empty string) as the default-domain key
+    # under "domains", and Windows PowerShell 5.1's ConvertFrom-Json cannot bind
+    # an empty PSCustomObject property name -- it throws "Cannot process argument
+    # because the value of argument 'name' is not valid" and silently produces a
+    # null $cfg, so every prior run of this script failed to actually patch the
+    # config despite reporting success paths. A raw string patch avoids parsing
+    # the domains block entirely.
     info "Enabling audiostream plugin in config.json..."
     try {
-        $rawJson = Get-Content $configPath -Raw -Encoding UTF8
-        $cfg     = $rawJson | ConvertFrom-Json
+        Copy-Item $configPath "$configPath.bak-$(Get-Date -Format yyyyMMdd-HHmmss)"
+        $content = Get-Content $configPath -Raw
 
-        if ($null -eq $cfg.settings.plugins) {
-            $pluginsObj = New-Object PSObject -Property @{ enabled = $true; list = @('audiostream') }
-            $cfg.settings | Add-Member -NotePropertyName 'plugins' -NotePropertyValue $pluginsObj -Force
+        if ($content -match '"audiostream"') {
+            ok "audiostream already referenced in config.json -- nothing to do"
+        } elseif ($content -match '"plugins"\s*:\s*\{\s*"enabled"\s*:\s*true\s*\}') {
+            $content = $content -replace '("plugins"\s*:\s*\{\s*"enabled"\s*:\s*true)(\s*\})', '$1, "list": ["audiostream"]$2'
+            [System.IO.File]::WriteAllText($configPath, $content, (New-Object System.Text.UTF8Encoding($false)))
+            ok "config.json updated -- audiostream enabled"
+        } elseif ($content -match '"plugins"\s*:') {
+            warn "Found a 'plugins' block in an unexpected shape -- add manually:"
+            warn '  "plugins": { "enabled": true, "list": ["audiostream"] }'
         } else {
-            $cfg.settings.plugins | Add-Member -NotePropertyName 'enabled' -NotePropertyValue $true -Force
-            if ($null -eq $cfg.settings.plugins.list) {
-                $cfg.settings.plugins | Add-Member -NotePropertyName 'list' -NotePropertyValue @('audiostream') -Force
-            } else {
-                $list = [System.Collections.ArrayList]@($cfg.settings.plugins.list)
-                if ($list -notcontains 'audiostream') { [void]$list.Add('audiostream') }
-                $cfg.settings.plugins.list = $list.ToArray()
-            }
+            warn "No 'plugins' key found under settings -- add manually:"
+            warn '  "plugins": { "enabled": true, "list": ["audiostream"] }'
         }
-
-        $cfg | ConvertTo-Json -Depth 10 | Out-File $configPath -Encoding UTF8
-        ok "config.json updated -- audiostream enabled"
     } catch {
         warn "Could not patch config.json: $_"
         warn 'Manual step: add "plugins": { "enabled": true, "list": ["audiostream"] } under settings'
