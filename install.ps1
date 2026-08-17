@@ -455,7 +455,17 @@ if (-not $SkipCloudflare) {
     Write-OK "DNS: $Domain -> $TunnelName"
 
     Write-Step 12 "Cloudflare tunnel config + service"
-    $credFile = "C:\Users\Administrator\.cloudflared\$tunnelId.json"
+    # Find credentials file dynamically - accounts for any username (not just Administrator)
+    $credFile = $null
+    foreach ($searchDir in @(
+        "$env:USERPROFILE\.cloudflared",
+        "C:\Users\$env:USERNAME\.cloudflared",
+        "C:\Users\Administrator\.cloudflared"
+    )) {
+        $candidate = "$searchDir\$tunnelId.json"
+        if (Test-Path $candidate -ErrorAction SilentlyContinue) { $credFile = $candidate; break }
+    }
+    if (-not $credFile) { $credFile = "$env:USERPROFILE\.cloudflared\$tunnelId.json" }
 
     if ($tunnelExists -and (Test-Path "$CF_CONFIG_DIR\config.yml")) {
         # Tunnel already exists - only add our hostname if it is not already in the config
@@ -523,18 +533,35 @@ ingress:
         $cfExe = (Get-Command cloudflared -ErrorAction SilentlyContinue).Source
         if (-not $cfExe) {
             foreach ($d in @("C:\Program Files (x86)\cloudflare\cloudflared",
-                             "C:\Program Files\cloudflare\cloudflared")) {
+                             "C:\Program Files\cloudflare\cloudflared",
+                             "C:\Program Files (x86)\cloudflared",
+                             "C:\Program Files\cloudflared")) {
                 if (Test-Path "$d\cloudflared.exe") { $cfExe = "$d\cloudflared.exe"; break }
             }
         }
         if (-not $cfExe) { Write-Fail "cloudflared.exe not found - cannot create service." }
 
-        $binPath = "`"$cfExe`" --config `"$CF_CONFIG_DIR\config.yml`" tunnel run"
-        cmd /c "sc.exe create cloudflared binPath= `"$binPath`" start= auto obj= LocalSystem DisplayName= `"Cloudflare Tunnel`" >nul 2>&1"
-        cmd /c "sc.exe description cloudflared `"Cloudflare Tunnel - Creations IT`" >nul 2>&1"
-        if ($LASTEXITCODE -ne 0) { Write-Fail "cloudflared service creation failed." }
+        # Remove conflicting EventLog key if present (left by aborted prior installs)
+        $evtKey = "HKLM:\SYSTEM\CurrentControlSet\Services\EventLog\Application\Cloudflared"
+        if (Test-Path $evtKey) {
+            Remove-Item $evtKey -Force -ErrorAction SilentlyContinue
+            Write-Info "Removed stale EventLog key"
+        }
 
-        cmd /c "sc.exe start cloudflared >nul 2>&1"
+        # Use cloudflared's own service installer - handles ImagePath + args correctly
+        $installOut = & $cfExe --config "$CF_CONFIG_DIR\config.yml" service install 2>&1
+        $installOk  = $LASTEXITCODE -eq 0 -or ($installOut -match "installed successfully|is installed")
+        if (-not $installOk) { Write-Fail "cloudflared service install failed: $installOut" }
+
+        # Explicitly set ImagePath with --config so LocalSystem picks it up
+        Set-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\cloudflared" `
+            -Name "ImagePath" `
+            -Value "`"$cfExe`" --config `"$CF_CONFIG_DIR\config.yml`" tunnel run" `
+            -ErrorAction SilentlyContinue
+
+        cmd /c "sc.exe description cloudflared `"Cloudflare Tunnel - Creations IT`" >nul 2>&1"
+
+        Start-Service -Name "cloudflared" -ErrorAction SilentlyContinue
         Start-Sleep 8
     }
 
