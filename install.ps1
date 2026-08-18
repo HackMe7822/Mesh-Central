@@ -231,6 +231,26 @@ New-Item -ItemType Directory -Force -Path $PUBLIC_DIR  | Out-Null
 Write-OK "Directories ready under $INSTALL_DIR"
 
 # --------------------------------------------------------------
+#  STEP 2b : Windows Defender exclusion
+#  MeshCentral signs agent binaries at startup; Defender quarantines
+#  them unless the install directory is excluded beforehand.
+# --------------------------------------------------------------
+Write-Info "Adding Windows Defender exclusion for $INSTALL_DIR..."
+try {
+    Add-MpPreference -ExclusionPath $INSTALL_DIR -ErrorAction Stop
+    Write-OK "Defender exclusion added: $INSTALL_DIR"
+} catch {
+    # Fallback: spawn a truly elevated subprocess (handles UAC-locked sessions)
+    $exclScript = "Add-MpPreference -ExclusionPath '$INSTALL_DIR'"
+    $exclFile   = "$env:TEMP\mesh_defender_excl.ps1"
+    $exclScript | Out-File $exclFile -Encoding utf8
+    Start-Process powershell -Verb RunAs -Wait `
+        -ArgumentList "-ExecutionPolicy Bypass -File `"$exclFile`""
+    Remove-Item $exclFile -Force -ErrorAction SilentlyContinue
+    Write-OK "Defender exclusion added (elevated): $INSTALL_DIR"
+}
+
+# --------------------------------------------------------------
 #  STEP 3 : Install MeshCentral
 # --------------------------------------------------------------
 Write-Step 3 "Installing MeshCentral"
