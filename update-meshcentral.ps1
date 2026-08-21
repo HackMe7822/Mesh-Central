@@ -34,6 +34,7 @@
 #>
 param(
     [string]$InstallDir = 'C:\MeshCentral',
+    [string]$Branch     = 'master',
     [switch]$Force
 )
 
@@ -139,7 +140,7 @@ if (-not $isFresh) {
 info "Installing fork from GitHub..."
 Set-Location $InstallDir
 
-$npmOut  = & npm install "git+https://github.com/HackMe7822/MeshCentral-Original.git" 2>&1
+$npmOut  = & npm install "git+https://github.com/HackMe7822/MeshCentral-Original.git#$Branch" 2>&1
 $npmExit = $LASTEXITCODE
 
 if ($npmExit -ne 0) {
