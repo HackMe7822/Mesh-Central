@@ -212,7 +212,15 @@ if (Test-Path $configPath) {
       "sitestyle": 3,
       "title": "Creations IT UAT",
       "title2": "Creations IT [UAT]",
-      "certUrl": "https://$UATHostname/"
+      "certUrl": "https://$UATHostname/",
+      "agentcustomization": {
+        "displayname": "Creations IT Remote Support [UAT]",
+        "description": "Creations IT UAT Remote Management Agent",
+        "companyname": "Creations IT UAT",
+        "servicename": "MeshAgentUAT",
+        "filename": "CreationsIT-UAT-Agent",
+        "image": "CreationsIT.png"
+      }
     }
   }
 }
